@@ -1,0 +1,2 @@
+# splitSmart
+Receipt Splitter
