@@ -20,6 +20,7 @@
 		44DE88CD2F4BDE7200400553 /* Receipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88CC2F4BDE7200400553 /* Receipt.swift */; };
 		44DE88CF2F4BDE8A00400553 /* SplitCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88CE2F4BDE8A00400553 /* SplitCalculator.swift */; };
 		44DE88D12F4BDEA500400553 /* SplitCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D02F4BDEA500400553 /* SplitCalculatorTests.swift */; };
+		44DE88D32F4BDEA500400553 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D22F4BDEA500400553 /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 		44DE88CC2F4BDE7200400553 /* Receipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Receipt.swift; sourceTree = "<group>"; };
 		44DE88CE2F4BDE8A00400553 /* SplitCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitCalculator.swift; sourceTree = "<group>"; };
 		44DE88D02F4BDEA500400553 /* SplitCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitCalculatorTests.swift; sourceTree = "<group>"; };
+		44DE88D22F4BDEA500400553 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -176,6 +178,7 @@
 		44DE88C52F4BDE1200400553 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				44DE88D22F4BDEA500400553 /* ContentView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -325,6 +328,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				44DE88D32F4BDEA500400553 /* ContentView.swift in Sources */,
 				44DE88CD2F4BDE7200400553 /* Receipt.swift in Sources */,
 				44DE88CB2F4BDE6A00400553 /* Item.swift in Sources */,
 				44DE88CF2F4BDE8A00400553 /* SplitCalculator.swift in Sources */,
