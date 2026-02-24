@@ -252,18 +252,30 @@ private struct ProfileView: View {
 }
 
 private struct ManualEntryView: View {
+    @State private var merchantName = ""
+    @State private var tax = ""
+    @State private var tip = ""
+
     var body: some View {
-        VStack(spacing: 12) {
-            Text("Manual entry form coming soon.")
-                .font(.headline)
-            Text("Next step will add merchant, tax, tip, and item inputs.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+        Form {
+            Section("Receipt Details") {
+                TextField("Merchant Name", text: $merchantName)
+                TextField("Tax", text: $tax)
+                TextField("Tip", text: $tip)
+            }
+
+            Section("Items") {
+                Button {
+                    // Next step: add dynamic item rows and removal.
+                } label: {
+                    Label("Add Item", systemImage: "plus.circle")
+                }
+
+                Text("Item rows coming next.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
-        .background(AppColors.groupedBackground)
         .navigationTitle("Manual Entry")
     }
 }
