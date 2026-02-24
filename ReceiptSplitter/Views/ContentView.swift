@@ -109,7 +109,12 @@ private struct HomeView: View {
     private var quickActions: some View {
         HStack(spacing: 14) {
             SmallActionCard(title: "Upload Photo", systemImage: "photo")
-            SmallActionCard(title: "Manual Entry", systemImage: "plus")
+            NavigationLink {
+                ManualEntryView()
+            } label: {
+                SmallActionCard(title: "Manual Entry", systemImage: "plus")
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -243,6 +248,23 @@ private struct ProfileView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColors.groupedBackground)
         .navigationTitle("Profile")
+    }
+}
+
+private struct ManualEntryView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Manual entry form coming soon.")
+                .font(.headline)
+            Text("Next step will add merchant, tax, tip, and item inputs.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+        .background(AppColors.groupedBackground)
+        .navigationTitle("Manual Entry")
     }
 }
 
