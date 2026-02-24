@@ -256,6 +256,7 @@ private struct ManualEntryView: View {
     @State private var tax = ""
     @State private var tip = ""
     @State private var itemDrafts: [ManualEntryItemDraft] = [ManualEntryItemDraft()]
+    @State private var splitResult: ManualSplitResult?
 
     var body: some View {
         Form {
@@ -307,12 +308,15 @@ private struct ManualEntryView: View {
 
             Section("Actions") {
                 Button("Calculate Split") {
-                    // Step 6: build Receipt from form and call SplitCalculator.
+                    submitManualSplit()
                 }
                 .disabled(!canSubmit)
             }
         }
         .navigationTitle("Manual Entry")
+        .navigationDestination(item: $splitResult) { result in
+            SplitResultsView(result: result)
+        }
     }
 
     private var isMerchantValid: Bool {
@@ -352,6 +356,43 @@ private struct ManualEntryView: View {
             itemDrafts = [ManualEntryItemDraft()]
         }
     }
+
+    private func submitManualSplit() {
+        let participant = Participant(name: "You")
+        let participantID = participant.id
+
+        let items: [ReceiptItem] = itemDrafts.compactMap { draft in
+            let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, let price = decimalValue(from: draft.price) else {
+                return nil
+            }
+
+            return ReceiptItem(
+                name: name,
+                quantity: draft.quantity,
+                unitPrice: price,
+                assignedParticipantIDs: [participantID]
+            )
+        }
+
+        guard
+            let taxValue = decimalValue(from: tax),
+            let tipValue = decimalValue(from: tip)
+        else {
+            return
+        }
+
+        let receipt = Receipt(
+            merchantName: merchantName.trimmingCharacters(in: .whitespacesAndNewlines),
+            participants: [participant],
+            items: items,
+            tax: taxValue,
+            tip: tipValue
+        )
+
+        let breakdown = SplitCalculator.calculate(receipt: receipt)
+        splitResult = ManualSplitResult(receipt: receipt, breakdown: breakdown)
+    }
 }
 
 private struct ManualEntryItemDraft: Identifiable {
@@ -359,6 +400,52 @@ private struct ManualEntryItemDraft: Identifiable {
     var name: String = ""
     var quantity: Int = 1
     var price: String = ""
+}
+
+private struct ManualSplitResult: Identifiable, Hashable {
+    let id = UUID()
+    let receipt: Receipt
+    let breakdown: [SplitBreakdown]
+
+    static func == (lhs: ManualSplitResult, rhs: ManualSplitResult) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+private struct SplitResultsView: View {
+    let result: ManualSplitResult
+
+    var body: some View {
+        List {
+            Section("Receipt Summary") {
+                LabeledContent("Merchant", value: result.receipt.merchantName)
+                LabeledContent("Subtotal", value: Formatters.currencyString(from: result.receipt.subtotal))
+                LabeledContent("Tax", value: Formatters.currencyString(from: result.receipt.tax))
+                LabeledContent("Tip", value: Formatters.currencyString(from: result.receipt.tip))
+                LabeledContent("Total", value: Formatters.currencyString(from: result.receipt.total))
+            }
+
+            Section("Per Person Split") {
+                ForEach(result.breakdown) { person in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(person.participant.name)
+                            .font(.headline)
+                        Text("Items: \(Formatters.currencyString(from: person.itemTotal))")
+                        Text("Tax: \(Formatters.currencyString(from: person.taxShare))")
+                        Text("Tip: \(Formatters.currencyString(from: person.tipShare))")
+                        Text("Grand Total: \(Formatters.currencyString(from: person.grandTotal))")
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .navigationTitle("Split Result")
+    }
 }
 
 private enum Formatters {
