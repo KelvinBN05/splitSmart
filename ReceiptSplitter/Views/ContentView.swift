@@ -255,6 +255,7 @@ private struct ManualEntryView: View {
     @State private var merchantName = ""
     @State private var tax = ""
     @State private var tip = ""
+    @State private var itemDrafts: [ManualEntryItemDraft] = [ManualEntryItemDraft()]
 
     var body: some View {
         Form {
@@ -262,22 +263,102 @@ private struct ManualEntryView: View {
                 TextField("Merchant Name", text: $merchantName)
                 TextField("Tax", text: $tax)
                 TextField("Tip", text: $tip)
+
+                if !isTaxValid {
+                    Text("Tax must be a valid number.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+
+                if !isTipValid {
+                    Text("Tip must be a valid number.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             }
 
             Section("Items") {
+                ForEach($itemDrafts) { $draft in
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Item name", text: $draft.name)
+
+                        HStack {
+                            Stepper("Qty: \(draft.quantity)", value: $draft.quantity, in: 1...99)
+                            TextField("Price", text: $draft.price)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .onDelete(perform: deleteItems)
+
                 Button {
-                    // Next step: add dynamic item rows and removal.
+                    itemDrafts.append(ManualEntryItemDraft())
                 } label: {
                     Label("Add Item", systemImage: "plus.circle")
                 }
 
-                Text("Item rows coming next.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                if !hasAtLeastOneValidItem {
+                    Text("Add at least one item with a name and numeric price.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Actions") {
+                Button("Calculate Split") {
+                    // Step 6: build Receipt from form and call SplitCalculator.
+                }
+                .disabled(!canSubmit)
             }
         }
         .navigationTitle("Manual Entry")
     }
+
+    private var isMerchantValid: Bool {
+        !merchantName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var isTaxValid: Bool {
+        decimalValue(from: tax) != nil
+    }
+
+    private var isTipValid: Bool {
+        decimalValue(from: tip) != nil
+    }
+
+    private var hasAtLeastOneValidItem: Bool {
+        itemDrafts.contains { draft in
+            !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            decimalValue(from: draft.price) != nil
+        }
+    }
+
+    private var canSubmit: Bool {
+        isMerchantValid && isTaxValid && isTipValid && hasAtLeastOneValidItem
+    }
+
+    private func decimalValue(from raw: String) -> Decimal? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return Decimal.zero }
+
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+        return Decimal(string: normalized)
+    }
+
+    private func deleteItems(at offsets: IndexSet) {
+        itemDrafts.remove(atOffsets: offsets)
+        if itemDrafts.isEmpty {
+            itemDrafts = [ManualEntryItemDraft()]
+        }
+    }
+}
+
+private struct ManualEntryItemDraft: Identifiable {
+    let id = UUID()
+    var name: String = ""
+    var quantity: Int = 1
+    var price: String = ""
 }
 
 private enum Formatters {
