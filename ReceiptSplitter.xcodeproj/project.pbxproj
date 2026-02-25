@@ -21,6 +21,8 @@
 		44DE88CF2F4BDE8A00400553 /* SplitCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88CE2F4BDE8A00400553 /* SplitCalculator.swift */; };
 		44DE88D12F4BDEA500400553 /* SplitCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D02F4BDEA500400553 /* SplitCalculatorTests.swift */; };
 		44DE88D32F4BDEA500400553 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D22F4BDEA500400553 /* ContentView.swift */; };
+		44DE88D52F4BDEA500400553 /* ManualEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D42F4BDEA500400553 /* ManualEntryView.swift */; };
+		44DE88D72F4BDEA500400553 /* ManualEntryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D62F4BDEA500400553 /* ManualEntryModels.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +61,8 @@
 		44DE88CE2F4BDE8A00400553 /* SplitCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitCalculator.swift; sourceTree = "<group>"; };
 		44DE88D02F4BDEA500400553 /* SplitCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitCalculatorTests.swift; sourceTree = "<group>"; };
 		44DE88D22F4BDEA500400553 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		44DE88D42F4BDEA500400553 /* ManualEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryView.swift; sourceTree = "<group>"; };
+		44DE88D62F4BDEA500400553 /* ManualEntryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryModels.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -156,6 +160,7 @@
 				44DE88C82F4BDE6000400553 /* Participant.swift */,
 				44DE88CA2F4BDE6A00400553 /* Item.swift */,
 				44DE88CC2F4BDE7200400553 /* Receipt.swift */,
+				44DE88D62F4BDEA500400553 /* ManualEntryModels.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -179,6 +184,7 @@
 			isa = PBXGroup;
 			children = (
 				44DE88D22F4BDEA500400553 /* ContentView.swift */,
+				44DE88D42F4BDEA500400553 /* ManualEntryView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -328,6 +334,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				44DE88D72F4BDEA500400553 /* ManualEntryModels.swift in Sources */,
+				44DE88D52F4BDEA500400553 /* ManualEntryView.swift in Sources */,
 				44DE88D32F4BDEA500400553 /* ContentView.swift in Sources */,
 				44DE88CD2F4BDE7200400553 /* Receipt.swift in Sources */,
 				44DE88CB2F4BDE6A00400553 /* Item.swift in Sources */,

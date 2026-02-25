@@ -104,6 +104,7 @@ enum ManualEntryMapper {
         var name: String
         var quantity: Int
         var price: String
+        var assignedParticipantNames: [String] = []
     }
 
     struct Input {
@@ -140,16 +141,23 @@ enum ManualEntryMapper {
 
         let participants = cleanedNames.isEmpty ? [Participant(name: "You")] : cleanedNames.map { Participant(name: $0) }
         let primaryParticipantID = participants[0].id
+        let participantIDByName = Dictionary(uniqueKeysWithValues: participants.map { ($0.name, $0.id) })
 
         let mappedItems: [ReceiptItem] = input.items.compactMap { item in
             let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, let price = parseDecimal(item.price) else { return nil }
 
+            let assignedIDs = item.assignedParticipantNames
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .compactMap { participantIDByName[$0] }
+
+            let finalAssignedIDs: Set<UUID> = assignedIDs.isEmpty ? [primaryParticipantID] : Set(assignedIDs)
+
             return ReceiptItem(
                 name: name,
                 quantity: max(item.quantity, 1),
                 unitPrice: price,
-                assignedParticipantIDs: [primaryParticipantID]
+                assignedParticipantIDs: finalAssignedIDs
             )
         }
 
