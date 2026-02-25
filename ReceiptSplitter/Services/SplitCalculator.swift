@@ -127,15 +127,19 @@ enum ManualEntryMapper {
         return Decimal(string: normalized)
     }
 
-    static func makeReceipt(input: Input, participantName: String = "You") throws -> Receipt {
+    static func makeReceipt(input: Input, participantNames: [String] = ["You"]) throws -> Receipt {
         let merchant = input.merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !merchant.isEmpty else { throw MapperError.emptyMerchant }
 
         guard let tax = parseDecimal(input.tax) else { throw MapperError.invalidTax }
         guard let tip = parseDecimal(input.tip) else { throw MapperError.invalidTip }
 
-        let participant = Participant(name: participantName)
-        let participantID = participant.id
+        let cleanedNames = participantNames
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let participants = cleanedNames.isEmpty ? [Participant(name: "You")] : cleanedNames.map { Participant(name: $0) }
+        let primaryParticipantID = participants[0].id
 
         let mappedItems: [ReceiptItem] = input.items.compactMap { item in
             let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -145,7 +149,7 @@ enum ManualEntryMapper {
                 name: name,
                 quantity: max(item.quantity, 1),
                 unitPrice: price,
-                assignedParticipantIDs: [participantID]
+                assignedParticipantIDs: [primaryParticipantID]
             )
         }
 
@@ -153,7 +157,7 @@ enum ManualEntryMapper {
 
         return Receipt(
             merchantName: merchant,
-            participants: [participant],
+            participants: participants,
             items: mappedItems,
             tax: tax,
             tip: tip

@@ -260,15 +260,19 @@ private struct ManualEntryView: View {
     let onReceiptCreated: (Receipt) -> Void
 
     @State private var merchantName = ""
+    @State private var participantNames = "You"
     @State private var tax = ""
     @State private var tip = ""
     @State private var itemDrafts: [ManualEntryItemDraft] = [ManualEntryItemDraft()]
     @State private var splitResult: ManualSplitResult?
+    @State private var submitErrorMessage: String?
+    @State private var isSubmitting = false
 
     var body: some View {
         Form {
             Section("Receipt Details") {
                 TextField("Merchant Name", text: $merchantName)
+                TextField("Participants (comma separated)", text: $participantNames)
                 TextField("Tax", text: $tax)
                 TextField("Tip", text: $tip)
 
@@ -280,6 +284,12 @@ private struct ManualEntryView: View {
 
                 if !isTipValid {
                     Text("Tip must be a valid number.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+
+                if let submitErrorMessage {
+                    Text(submitErrorMessage)
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }
@@ -317,7 +327,7 @@ private struct ManualEntryView: View {
                 Button("Calculate Split") {
                     submitManualSplit()
                 }
-                .disabled(!canSubmit)
+                .disabled(!canSubmit || isSubmitting)
             }
         }
         .navigationTitle("Manual Entry")
@@ -357,6 +367,12 @@ private struct ManualEntryView: View {
     }
 
     private func submitManualSplit() {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
+
+        submitErrorMessage = nil
+
         let input = ManualEntryMapper.Input(
             merchantName: merchantName,
             tax: tax,
@@ -366,13 +382,37 @@ private struct ManualEntryView: View {
             }
         )
 
-        guard let receipt = try? ManualEntryMapper.makeReceipt(input: input) else {
+        let participants = participantNames
+            .split(separator: ",")
+            .map { String($0) }
+
+        let receipt: Receipt
+        do {
+            receipt = try ManualEntryMapper.makeReceipt(input: input, participantNames: participants)
+        } catch let error as ManualEntryMapper.MapperError {
+            submitErrorMessage = mapperErrorText(error)
+            return
+        } catch {
+            submitErrorMessage = "Unable to calculate split. Please review your inputs."
             return
         }
 
         let breakdown = SplitCalculator.calculate(receipt: receipt)
         splitResult = ManualSplitResult(receipt: receipt, breakdown: breakdown)
         onReceiptCreated(receipt)
+    }
+
+    private func mapperErrorText(_ error: ManualEntryMapper.MapperError) -> String {
+        switch error {
+        case .emptyMerchant:
+            return "Merchant name is required."
+        case .invalidTax:
+            return "Tax must be a valid number."
+        case .invalidTip:
+            return "Tip must be a valid number."
+        case .noValidItems:
+            return "Add at least one valid item."
+        }
     }
 }
 
