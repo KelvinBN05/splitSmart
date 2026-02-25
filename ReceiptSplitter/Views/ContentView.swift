@@ -6,17 +6,21 @@ import AppKit
 #endif
 
 struct ContentView: View {
+    @State private var receipts = DemoData.receipts
+
     var body: some View {
         TabView {
             NavigationStack {
-                HomeView(receipts: DemoData.receipts)
+                HomeView(receipts: receipts) { newReceipt in
+                    receipts.insert(newReceipt, at: 0)
+                }
             }
             .tabItem {
                 Label("Home", systemImage: "house")
             }
 
             NavigationStack {
-                HistoryView(receipts: DemoData.receipts)
+                HistoryView(receipts: receipts)
             }
             .tabItem {
                 Label("History", systemImage: "clock")
@@ -35,6 +39,7 @@ struct ContentView: View {
 
 private struct HomeView: View {
     let receipts: [Receipt]
+    let onReceiptCreated: (Receipt) -> Void
 
     var body: some View {
         ScrollView {
@@ -110,7 +115,7 @@ private struct HomeView: View {
         HStack(spacing: 14) {
             SmallActionCard(title: "Upload Photo", systemImage: "photo")
             NavigationLink {
-                ManualEntryView()
+                ManualEntryView(onReceiptCreated: onReceiptCreated)
             } label: {
                 SmallActionCard(title: "Manual Entry", systemImage: "plus")
             }
@@ -252,6 +257,8 @@ private struct ProfileView: View {
 }
 
 private struct ManualEntryView: View {
+    let onReceiptCreated: (Receipt) -> Void
+
     @State private var merchantName = ""
     @State private var tax = ""
     @State private var tip = ""
@@ -324,30 +331,22 @@ private struct ManualEntryView: View {
     }
 
     private var isTaxValid: Bool {
-        decimalValue(from: tax) != nil
+        ManualEntryMapper.parseDecimal(tax) != nil
     }
 
     private var isTipValid: Bool {
-        decimalValue(from: tip) != nil
+        ManualEntryMapper.parseDecimal(tip) != nil
     }
 
     private var hasAtLeastOneValidItem: Bool {
         itemDrafts.contains { draft in
             !draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            decimalValue(from: draft.price) != nil
+            ManualEntryMapper.parseDecimal(draft.price) != nil
         }
     }
 
     private var canSubmit: Bool {
         isMerchantValid && isTaxValid && isTipValid && hasAtLeastOneValidItem
-    }
-
-    private func decimalValue(from raw: String) -> Decimal? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return Decimal.zero }
-
-        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
-        return Decimal(string: normalized)
     }
 
     private func deleteItems(at offsets: IndexSet) {
@@ -358,40 +357,22 @@ private struct ManualEntryView: View {
     }
 
     private func submitManualSplit() {
-        let participant = Participant(name: "You")
-        let participantID = participant.id
-
-        let items: [ReceiptItem] = itemDrafts.compactMap { draft in
-            let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty, let price = decimalValue(from: draft.price) else {
-                return nil
+        let input = ManualEntryMapper.Input(
+            merchantName: merchantName,
+            tax: tax,
+            tip: tip,
+            items: itemDrafts.map {
+                ManualEntryMapper.ItemInput(name: $0.name, quantity: $0.quantity, price: $0.price)
             }
+        )
 
-            return ReceiptItem(
-                name: name,
-                quantity: draft.quantity,
-                unitPrice: price,
-                assignedParticipantIDs: [participantID]
-            )
-        }
-
-        guard
-            let taxValue = decimalValue(from: tax),
-            let tipValue = decimalValue(from: tip)
-        else {
+        guard let receipt = try? ManualEntryMapper.makeReceipt(input: input) else {
             return
         }
 
-        let receipt = Receipt(
-            merchantName: merchantName.trimmingCharacters(in: .whitespacesAndNewlines),
-            participants: [participant],
-            items: items,
-            tax: taxValue,
-            tip: tipValue
-        )
-
         let breakdown = SplitCalculator.calculate(receipt: receipt)
         splitResult = ManualSplitResult(receipt: receipt, breakdown: breakdown)
+        onReceiptCreated(receipt)
     }
 }
 
