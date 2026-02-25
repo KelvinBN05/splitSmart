@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ManualEntryView: View {
-    let onReceiptCreated: (Receipt) -> Void
+    let onReceiptSaved: (Receipt) -> Void
 
     @State private var merchantName = ""
     @State private var participantNames = "You"
@@ -96,7 +96,9 @@ struct ManualEntryView: View {
         }
         .navigationTitle("Manual Entry")
         .navigationDestination(item: $splitResult) { result in
-            SplitResultsView(result: result)
+            SplitResultsView(result: result) { savedReceipt in
+                onReceiptSaved(savedReceipt)
+            }
         }
     }
 
@@ -196,7 +198,6 @@ struct ManualEntryView: View {
 
         let breakdown = SplitCalculator.calculate(receipt: receipt)
         splitResult = ManualSplitResult(receipt: receipt, breakdown: breakdown)
-        onReceiptCreated(receipt)
     }
 
     private func mapperErrorText(_ error: ManualEntryMapper.MapperError) -> String {
@@ -215,6 +216,9 @@ struct ManualEntryView: View {
 
 private struct SplitResultsView: View {
     let result: ManualSplitResult
+    let onSave: (Receipt) -> Void
+
+    @State private var didSave = false
 
     var body: some View {
         List {
@@ -239,6 +243,15 @@ private struct SplitResultsView: View {
                     }
                     .padding(.vertical, 4)
                 }
+            }
+
+            Section("Actions") {
+                Button(didSave ? "Saved to History" : "Save to History") {
+                    guard !didSave else { return }
+                    onSave(result.receipt)
+                    didSave = true
+                }
+                .disabled(didSave)
             }
         }
         .navigationTitle("Split Result")

@@ -39,7 +39,7 @@ struct ContentView: View {
 
 private struct HomeView: View {
     let receipts: [Receipt]
-    let onReceiptCreated: (Receipt) -> Void
+    let onReceiptSaved: (Receipt) -> Void
 
     var body: some View {
         ScrollView {
@@ -115,7 +115,7 @@ private struct HomeView: View {
         HStack(spacing: 14) {
             SmallActionCard(title: "Upload Photo", systemImage: "photo")
             NavigationLink {
-                ManualEntryView(onReceiptCreated: onReceiptCreated)
+                ManualEntryView(onReceiptSaved: onReceiptSaved)
             } label: {
                 SmallActionCard(title: "Manual Entry", systemImage: "plus")
             }
