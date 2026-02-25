@@ -6,17 +6,21 @@ import AppKit
 #endif
 
 struct ContentView: View {
+    @State private var receipts = DemoData.receipts
+
     var body: some View {
         TabView {
             NavigationStack {
-                HomeView(receipts: DemoData.receipts)
+                HomeView(receipts: receipts) { newReceipt in
+                    receipts.insert(newReceipt, at: 0)
+                }
             }
             .tabItem {
                 Label("Home", systemImage: "house")
             }
 
             NavigationStack {
-                HistoryView(receipts: DemoData.receipts)
+                HistoryView(receipts: receipts)
             }
             .tabItem {
                 Label("History", systemImage: "clock")
@@ -35,6 +39,7 @@ struct ContentView: View {
 
 private struct HomeView: View {
     let receipts: [Receipt]
+    let onReceiptSaved: (Receipt) -> Void
 
     var body: some View {
         ScrollView {
@@ -109,7 +114,12 @@ private struct HomeView: View {
     private var quickActions: some View {
         HStack(spacing: 14) {
             SmallActionCard(title: "Upload Photo", systemImage: "photo")
-            SmallActionCard(title: "Manual Entry", systemImage: "plus")
+            NavigationLink {
+                ManualEntryView(onReceiptSaved: onReceiptSaved)
+            } label: {
+                SmallActionCard(title: "Manual Entry", systemImage: "plus")
+            }
+            .buttonStyle(.plain)
         }
     }
 

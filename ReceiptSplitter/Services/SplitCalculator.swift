@@ -99,6 +99,80 @@ enum SplitCalculator {
     }
 }
 
+enum ManualEntryMapper {
+    struct ItemInput {
+        var name: String
+        var quantity: Int
+        var price: String
+        var assignedParticipantNames: [String] = []
+    }
+
+    struct Input {
+        var merchantName: String
+        var tax: String
+        var tip: String
+        var items: [ItemInput]
+    }
+
+    enum MapperError: Error, Equatable {
+        case emptyMerchant
+        case invalidTax
+        case invalidTip
+        case noValidItems
+    }
+
+    static func parseDecimal(_ raw: String) -> Decimal? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return Decimal.zero }
+        let normalized = trimmed.replacingOccurrences(of: ",", with: ".")
+        return Decimal(string: normalized)
+    }
+
+    static func makeReceipt(input: Input, participantNames: [String] = ["You"]) throws -> Receipt {
+        let merchant = input.merchantName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !merchant.isEmpty else { throw MapperError.emptyMerchant }
+
+        guard let tax = parseDecimal(input.tax) else { throw MapperError.invalidTax }
+        guard let tip = parseDecimal(input.tip) else { throw MapperError.invalidTip }
+
+        let cleanedNames = participantNames
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let participants = cleanedNames.isEmpty ? [Participant(name: "You")] : cleanedNames.map { Participant(name: $0) }
+        let primaryParticipantID = participants[0].id
+        let participantIDByName = Dictionary(uniqueKeysWithValues: participants.map { ($0.name, $0.id) })
+
+        let mappedItems: [ReceiptItem] = input.items.compactMap { item in
+            let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, let price = parseDecimal(item.price) else { return nil }
+
+            let assignedIDs = item.assignedParticipantNames
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .compactMap { participantIDByName[$0] }
+
+            let finalAssignedIDs: Set<UUID> = assignedIDs.isEmpty ? [primaryParticipantID] : Set(assignedIDs)
+
+            return ReceiptItem(
+                name: name,
+                quantity: max(item.quantity, 1),
+                unitPrice: price,
+                assignedParticipantIDs: finalAssignedIDs
+            )
+        }
+
+        guard !mappedItems.isEmpty else { throw MapperError.noValidItems }
+
+        return Receipt(
+            merchantName: merchant,
+            participants: participants,
+            items: mappedItems,
+            tax: tax,
+            tip: tip
+        )
+    }
+}
+
 private extension Decimal {
     func roundedToCents() -> Decimal {
         var value = self

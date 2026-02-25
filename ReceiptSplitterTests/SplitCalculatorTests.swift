@@ -59,6 +59,117 @@ final class SplitCalculatorTests: XCTestCase {
         XCTAssertEqual(samTotal, decimal(4.99))
     }
 
+    func testManualEntryMapperBuildsReceiptFromValidInput() throws {
+        let input = ManualEntryMapper.Input(
+            merchantName: "Cafe Blue",
+            tax: "1.25",
+            tip: "2.00",
+            items: [
+                .init(name: "Latte", quantity: 1, price: "5.50"),
+                .init(name: "Bagel", quantity: 2, price: "3.00")
+            ]
+        )
+
+        let receipt = try ManualEntryMapper.makeReceipt(input: input)
+
+        XCTAssertEqual(receipt.merchantName, "Cafe Blue")
+        XCTAssertEqual(receipt.tax, decimal(1.25))
+        XCTAssertEqual(receipt.tip, decimal(2.00))
+        XCTAssertEqual(receipt.items.count, 2)
+        XCTAssertEqual(receipt.items[1].quantity, 2)
+        XCTAssertEqual(receipt.total, decimal(12.75))
+    }
+
+    func testManualEntryMapperRejectsInvalidTax() {
+        let input = ManualEntryMapper.Input(
+            merchantName: "Cafe Blue",
+            tax: "abc",
+            tip: "1.00",
+            items: [.init(name: "Latte", quantity: 1, price: "5.00")]
+        )
+
+        XCTAssertThrowsError(try ManualEntryMapper.makeReceipt(input: input)) { error in
+            XCTAssertEqual(error as? ManualEntryMapper.MapperError, .invalidTax)
+        }
+    }
+
+    func testManualEntryMapperRequiresAtLeastOneValidItem() {
+        let input = ManualEntryMapper.Input(
+            merchantName: "Cafe Blue",
+            tax: "",
+            tip: "",
+            items: [.init(name: "", quantity: 1, price: "")]
+        )
+
+        XCTAssertThrowsError(try ManualEntryMapper.makeReceipt(input: input)) { error in
+            XCTAssertEqual(error as? ManualEntryMapper.MapperError, .noValidItems)
+        }
+    }
+
+    func testManualEntryMapperTreatsEmptyTaxAndTipAsZero() throws {
+        let input = ManualEntryMapper.Input(
+            merchantName: "Cafe Blue",
+            tax: "",
+            tip: "",
+            items: [.init(name: "Latte", quantity: 1, price: "5.00")]
+        )
+
+        let receipt = try ManualEntryMapper.makeReceipt(input: input)
+        XCTAssertEqual(receipt.tax, decimal(0.00))
+        XCTAssertEqual(receipt.tip, decimal(0.00))
+        XCTAssertEqual(receipt.total, decimal(5.00))
+    }
+
+    func testManualEntryMapperAcceptsCommaDecimalInput() throws {
+        let input = ManualEntryMapper.Input(
+            merchantName: "Cafe Blue",
+            tax: "1,25",
+            tip: "0,50",
+            items: [.init(name: "Latte", quantity: 1, price: "5,75")]
+        )
+
+        let receipt = try ManualEntryMapper.makeReceipt(input: input)
+        XCTAssertEqual(receipt.total, decimal(7.50))
+    }
+
+    func testManualEntryMapperIgnoresInvalidRowsWhenValidRowsExist() throws {
+        let input = ManualEntryMapper.Input(
+            merchantName: "Cafe Blue",
+            tax: "0",
+            tip: "0",
+            items: [
+                .init(name: "", quantity: 1, price: "2.00"),
+                .init(name: "Valid", quantity: 2, price: "3.00"),
+                .init(name: "Invalid Price", quantity: 1, price: "abc")
+            ]
+        )
+
+        let receipt = try ManualEntryMapper.makeReceipt(input: input)
+        XCTAssertEqual(receipt.items.count, 1)
+        XCTAssertEqual(receipt.items.first?.name, "Valid")
+        XCTAssertEqual(receipt.total, decimal(6.00))
+    }
+
+    func testManualEntryMapperAssignsItemToSelectedParticipants() throws {
+        let input = ManualEntryMapper.Input(
+            merchantName: "Cafe Blue",
+            tax: "",
+            tip: "",
+            items: [
+                .init(
+                    name: "Shared Nachos",
+                    quantity: 1,
+                    price: "10.00",
+                    assignedParticipantNames: ["You", "Sam"]
+                )
+            ]
+        )
+
+        let receipt = try ManualEntryMapper.makeReceipt(input: input, participantNames: ["You", "Sam"])
+        XCTAssertEqual(receipt.participants.count, 2)
+        XCTAssertEqual(receipt.items.first?.assignedParticipantIDs.count, 2)
+    }
+
     private func totalGrand(from result: [SplitBreakdown]) -> Decimal {
         result.reduce(Decimal.zero) { $0 + $1.grandTotal }
     }
