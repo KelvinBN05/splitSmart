@@ -10,6 +10,7 @@ final class SessionStore: ObservableObject {
 
     @Published private(set) var state: State = .loading
     @Published var authErrorMessage: String?
+    @Published private(set) var isAuthenticating = false
 
     private let authService: AuthService
 
@@ -28,6 +29,8 @@ final class SessionStore: ObservableObject {
 
     func signIn(email: String, password: String) async {
         authErrorMessage = nil
+        isAuthenticating = true
+        defer { isAuthenticating = false }
         do {
             let user = try await authService.signIn(email: email, password: password)
             state = .signedIn(user)
@@ -38,6 +41,8 @@ final class SessionStore: ObservableObject {
 
     func signUp(email: String, password: String) async {
         authErrorMessage = nil
+        isAuthenticating = true
+        defer { isAuthenticating = false }
         do {
             let user = try await authService.signUp(email: email, password: password)
             state = .signedIn(user)

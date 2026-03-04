@@ -41,6 +41,7 @@ private struct AuthView: View {
 
     @State private var email = ""
     @State private var password = ""
+    @State private var confirmPassword = ""
     @State private var mode: Mode = .signIn
 
     private enum Mode: String, CaseIterable, Identifiable {
@@ -61,18 +62,33 @@ private struct AuthView: View {
                 }
             }
             .pickerStyle(.segmented)
-
-            VStack(spacing: 12) {
-                TextField("Email", text: $email)
-                    .textInputAutocapitalization(.never)
-#if os(iOS)
-                    .keyboardType(.emailAddress)
-                    .autocorrectionDisabled(true)
-#endif
-
-                SecureField("Password", text: $password)
+            .onChange(of: mode) { _ in
+                sessionStore.authErrorMessage = nil
             }
-            .textFieldStyle(.roundedBorder)
+
+            if mode == .signIn {
+                LoginView(
+                    email: $email,
+                    password: $password,
+                    isSubmitting: sessionStore.isAuthenticating,
+                    onSubmit: submit
+                )
+            } else {
+                RegisterView(
+                    email: $email,
+                    password: $password,
+                    confirmPassword: $confirmPassword,
+                    isSubmitting: sessionStore.isAuthenticating,
+                    onSubmit: submit
+                )
+            }
+
+            if let localValidationError {
+                Text(localValidationError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
 
             if let authError = sessionStore.authErrorMessage {
                 Text(authError)
@@ -80,23 +96,50 @@ private struct AuthView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
             }
-
-            Button(mode.rawValue) {
-                Task {
-                    if mode == .signIn {
-                        await sessionStore.signIn(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
-                    } else {
-                        await sessionStore.signUp(email: email.trimmingCharacters(in: .whitespacesAndNewlines), password: password)
-                    }
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
         }
         .padding(24)
         .frame(maxWidth: 420)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(authBackgroundColor)
+    }
+
+    private var normalizedEmail: String {
+        email.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var localValidationError: String? {
+        guard !normalizedEmail.isEmpty || !password.isEmpty || !confirmPassword.isEmpty else { return nil }
+
+        if !normalizedEmail.contains("@") || !normalizedEmail.contains(".") {
+            return "Enter a valid email address."
+        }
+
+        if password.count < 6 {
+            return "Password must be at least 6 characters."
+        }
+
+        if mode == .signUp && password != confirmPassword {
+            return "Passwords do not match."
+        }
+
+        return nil
+    }
+
+    private var canSubmit: Bool {
+        localValidationError == nil && !normalizedEmail.isEmpty && !password.isEmpty
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+        sessionStore.authErrorMessage = nil
+
+        Task {
+            if mode == .signIn {
+                await sessionStore.signIn(email: normalizedEmail, password: password)
+            } else {
+                await sessionStore.signUp(email: normalizedEmail, password: password)
+            }
+        }
     }
 
     private var authBackgroundColor: Color {
