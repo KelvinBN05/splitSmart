@@ -28,6 +28,8 @@
 		44DE88D72F4BDEA500400553 /* ManualEntryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D62F4BDEA500400553 /* ManualEntryModels.swift */; };
 		44DE88D92F4BDEA500400553 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D82F4BDEA500400553 /* AuthService.swift */; };
 		44DE88DB2F4BDEA500400553 /* FirebaseAuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88DA2F4BDEA500400553 /* FirebaseAuthService.swift */; };
+		44DE88DD2F4BDEA500400553 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88DC2F4BDEA500400553 /* SessionStore.swift */; };
+		44DE88DF2F4BDEA500400553 /* AuthGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88DE2F4BDEA500400553 /* AuthGateView.swift */; };
 		44FEA4802F4F76A500751834 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 44FEA47F2F4F76A500751834 /* FirebaseAuth */; };
 		44FEA4822F4F76A500751834 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44FEA4812F4F76A500751834 /* FirebaseCore */; };
 		44FEA4842F4F76A500751834 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 44FEA4832F4F76A500751834 /* FirebaseFirestore */; };
@@ -75,6 +77,8 @@
 		44DE88D62F4BDEA500400553 /* ManualEntryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryModels.swift; sourceTree = "<group>"; };
 		44DE88D82F4BDEA500400553 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
 		44DE88DA2F4BDEA500400553 /* FirebaseAuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirebaseAuthService.swift; sourceTree = "<group>"; };
+		44DE88DC2F4BDEA500400553 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		44DE88DE2F4BDEA500400553 /* AuthGateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthGateView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -195,6 +199,7 @@
 		44DE88C42F4BDE0B00400553 /* ViewModels */ = {
 			isa = PBXGroup;
 			children = (
+				44DE88DC2F4BDEA500400553 /* SessionStore.swift */,
 			);
 			path = ViewModels;
 			sourceTree = "<group>";
@@ -202,6 +207,7 @@
 		44DE88C52F4BDE1200400553 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				44DE88DE2F4BDEA500400553 /* AuthGateView.swift */,
 				44DE88D22F4BDEA500400553 /* ContentView.swift */,
 				44DE88D42F4BDEA500400553 /* ManualEntryView.swift */,
 			);
@@ -359,6 +365,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				44DE88DD2F4BDEA500400553 /* SessionStore.swift in Sources */,
+				44DE88DF2F4BDEA500400553 /* AuthGateView.swift in Sources */,
 				44DE88D92F4BDEA500400553 /* AuthService.swift in Sources */,
 				44DE88DB2F4BDEA500400553 /* FirebaseAuthService.swift in Sources */,
 				44DE88D72F4BDEA500400553 /* ManualEntryModels.swift in Sources */,
