@@ -1,15 +1,13 @@
-//
-//  ReceiptSplitterApp.swift
-//  ReceiptSplitter
-//
-//  Created by Kelvin Nguyen on 2/22/26.
-//
-
 import SwiftUI
+import FirebaseCore
 
 @main
 struct ReceiptSplitterApp: App {
     let persistenceController = PersistenceController.shared
+
+    init() {
+        FirebaseApp.configure()
+    }
 
     var body: some Scene {
         WindowGroup {
