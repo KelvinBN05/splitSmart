@@ -11,8 +11,8 @@ struct RegisterView: View {
     var body: some View {
         VStack(spacing: 12) {
             TextField("Email", text: $email)
-                .textInputAutocapitalization(.never)
 #if os(iOS)
+                .autocapitalization(.none)
                 .keyboardType(.emailAddress)
                 .autocorrectionDisabled(true)
 #endif

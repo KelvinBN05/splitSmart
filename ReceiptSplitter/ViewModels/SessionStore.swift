@@ -13,9 +13,14 @@ final class SessionStore: ObservableObject {
     @Published private(set) var isAuthenticating = false
 
     private let authService: AuthService
+    private let userProfileRepository: UserProfileRepository
 
-    init(authService: AuthService = FirebaseAuthService()) {
+    init(
+        authService: AuthService = FirebaseAuthService(),
+        userProfileRepository: UserProfileRepository = FirestoreUserProfileRepository()
+    ) {
         self.authService = authService
+        self.userProfileRepository = userProfileRepository
         restoreSession()
     }
 
@@ -32,10 +37,19 @@ final class SessionStore: ObservableObject {
         isAuthenticating = true
         defer { isAuthenticating = false }
         do {
-            let user = try await authService.signIn(email: email, password: password)
+            let user = try await withTimeout(seconds: 15) {
+                try await self.authService.signIn(email: email, password: password)
+            }
             state = .signedIn(user)
+            Task {
+                try? await self.userProfileRepository.upsertUserProfile(for: user)
+            }
+        } catch is TimeoutError {
+            authErrorMessage = "Sign in timed out. Check your connection and try again."
         } catch {
-            authErrorMessage = error.localizedDescription
+            let nsError = error as NSError
+            print("AUTH ERROR [signIn] domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+            authErrorMessage = readableAuthError(from: nsError, fallback: error.localizedDescription)
         }
     }
 
@@ -44,10 +58,19 @@ final class SessionStore: ObservableObject {
         isAuthenticating = true
         defer { isAuthenticating = false }
         do {
-            let user = try await authService.signUp(email: email, password: password)
+            let user = try await withTimeout(seconds: 15) {
+                try await self.authService.signUp(email: email, password: password)
+            }
             state = .signedIn(user)
+            Task {
+                try? await self.userProfileRepository.upsertUserProfile(for: user)
+            }
+        } catch is TimeoutError {
+            authErrorMessage = "Create account timed out. Check your connection and try again."
         } catch {
-            authErrorMessage = error.localizedDescription
+            let nsError = error as NSError
+            print("AUTH ERROR [signUp] domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+            authErrorMessage = readableAuthError(from: nsError, fallback: error.localizedDescription)
         }
     }
 
@@ -58,6 +81,37 @@ final class SessionStore: ObservableObject {
             state = .signedOut
         } catch {
             authErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func readableAuthError(from error: NSError, fallback: String) -> String {
+        if error.domain == NSURLErrorDomain {
+            return "Network error. Check your internet connection and try again."
+        }
+        return fallback
+    }
+
+    private struct TimeoutError: Error {}
+
+    private func withTimeout<T>(
+        seconds: Double,
+        operation: @escaping () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw TimeoutError()
+            }
+
+            guard let result = try await group.next() else {
+                throw TimeoutError()
+            }
+
+            group.cancelAll()
+            return result
         }
     }
 }

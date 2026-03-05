@@ -32,6 +32,8 @@
 		44DE88DF2F4BDEA500400553 /* AuthGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88DE2F4BDEA500400553 /* AuthGateView.swift */; };
 		44DE88E12F4BDEA500400553 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E02F4BDEA500400553 /* LoginView.swift */; };
 		44DE88E32F4BDEA500400553 /* RegisterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E22F4BDEA500400553 /* RegisterView.swift */; };
+		44DE88E52F4BDEA500400553 /* UserProfileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E42F4BDEA500400553 /* UserProfileRepository.swift */; };
+		44DE88E72F4BDEA500400553 /* FirestoreUserProfileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E62F4BDEA500400553 /* FirestoreUserProfileRepository.swift */; };
 		44FEA4802F4F76A500751834 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 44FEA47F2F4F76A500751834 /* FirebaseAuth */; };
 		44FEA4822F4F76A500751834 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 44FEA4812F4F76A500751834 /* FirebaseCore */; };
 		44FEA4842F4F76A500751834 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 44FEA4832F4F76A500751834 /* FirebaseFirestore */; };
@@ -83,6 +85,8 @@
 		44DE88DE2F4BDEA500400553 /* AuthGateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthGateView.swift; sourceTree = "<group>"; };
 		44DE88E02F4BDEA500400553 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		44DE88E22F4BDEA500400553 /* RegisterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterView.swift; sourceTree = "<group>"; };
+		44DE88E42F4BDEA500400553 /* UserProfileRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileRepository.swift; sourceTree = "<group>"; };
+		44DE88E62F4BDEA500400553 /* FirestoreUserProfileRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirestoreUserProfileRepository.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -194,8 +198,10 @@
 			isa = PBXGroup;
 			children = (
 				44DE88D82F4BDEA500400553 /* AuthService.swift */,
+				44DE88E62F4BDEA500400553 /* FirestoreUserProfileRepository.swift */,
 				44DE88DA2F4BDEA500400553 /* FirebaseAuthService.swift */,
 				44DE88CE2F4BDE8A00400553 /* SplitCalculator.swift */,
+				44DE88E42F4BDEA500400553 /* UserProfileRepository.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -376,6 +382,7 @@
 				44DE88E12F4BDEA500400553 /* LoginView.swift in Sources */,
 				44DE88E32F4BDEA500400553 /* RegisterView.swift in Sources */,
 				44DE88D92F4BDEA500400553 /* AuthService.swift in Sources */,
+				44DE88E72F4BDEA500400553 /* FirestoreUserProfileRepository.swift in Sources */,
 				44DE88DB2F4BDEA500400553 /* FirebaseAuthService.swift in Sources */,
 				44DE88D72F4BDEA500400553 /* ManualEntryModels.swift in Sources */,
 				44DE88D52F4BDEA500400553 /* ManualEntryView.swift in Sources */,
@@ -387,6 +394,7 @@
 				44189E1B2F4BDBE900FDBEC4 /* ReceiptSplitter.xcdatamodeld in Sources */,
 				44189E182F4BDBE900FDBEC4 /* Persistence.swift in Sources */,
 				44DE88C92F4BDE6000400553 /* Participant.swift in Sources */,
+				44DE88E52F4BDEA500400553 /* UserProfileRepository.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

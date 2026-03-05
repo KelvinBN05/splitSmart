@@ -62,7 +62,7 @@ private struct AuthView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .onChange(of: mode) { _ in
+            .onChange(of: mode) {
                 sessionStore.authErrorMessage = nil
             }
 
@@ -95,6 +95,11 @@ private struct AuthView: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
+            }
+
+            if sessionStore.isAuthenticating {
+                ProgressView(mode == .signIn ? "Signing in..." : "Creating account...")
+                    .font(.footnote)
             }
         }
         .padding(24)
