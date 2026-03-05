@@ -2,6 +2,8 @@ import SwiftUI
 import FirebaseFirestore
 #if os(iOS)
 import UIKit
+import PhotosUI
+import Vision
 #elseif os(macOS)
 import AppKit
 #endif
@@ -104,6 +106,12 @@ struct ContentView: View {
 private struct HomeView: View {
     let receipts: [Receipt]
     let onReceiptSaved: (Receipt) -> Void
+#if os(iOS)
+    @State private var selectedPhotoItem: PhotosPickerItem?
+#endif
+    @State private var isProcessingPhoto = false
+    @State private var photoProcessingError: String?
+    @State private var parsedPrefill: ManualEntryPrefill?
 
     var body: some View {
         ScrollView {
@@ -121,7 +129,16 @@ private struct HomeView: View {
         .navigationTitle("SplitSmart")
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: selectedPhotoItem) { item in
+            guard let item else { return }
+            Task {
+                await processPhotoSelection(item)
+            }
+        }
 #endif
+        .navigationDestination(item: $parsedPrefill) { prefill in
+            ManualEntryView(prefill: prefill, onReceiptSaved: onReceiptSaved)
+        }
     }
 
     private var header: some View {
@@ -176,16 +193,63 @@ private struct HomeView: View {
     }
 
     private var quickActions: some View {
-        HStack(spacing: 14) {
-            SmallActionCard(title: "Upload Photo", systemImage: "photo")
-            NavigationLink {
-                ManualEntryView(onReceiptSaved: onReceiptSaved)
-            } label: {
-                SmallActionCard(title: "Manual Entry", systemImage: "plus")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 14) {
+#if os(iOS)
+                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    SmallActionCard(
+                        title: isProcessingPhoto ? "Reading Receipt..." : "Upload Photo",
+                        systemImage: "photo"
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isProcessingPhoto)
+#else
+                SmallActionCard(title: "Upload Photo", systemImage: "photo")
+#endif
+
+                NavigationLink {
+                    ManualEntryView(onReceiptSaved: onReceiptSaved)
+                } label: {
+                    SmallActionCard(title: "Manual Entry", systemImage: "plus")
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            if let photoProcessingError {
+                Text(photoProcessingError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
         }
     }
+
+#if os(iOS)
+    private func processPhotoSelection(_ item: PhotosPickerItem) async {
+        guard !isProcessingPhoto else { return }
+        isProcessingPhoto = true
+        photoProcessingError = nil
+        defer { isProcessingPhoto = false }
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                photoProcessingError = "Unable to read selected photo."
+                return
+            }
+            guard let image = UIImage(data: data), let cgImage = image.cgImage else {
+                photoProcessingError = "Could not process that image format."
+                return
+            }
+
+            let text = try await ReceiptOCRService.extractText(from: cgImage)
+            let prefill = ReceiptOCRParser.prefill(fromRecognizedText: text)
+            parsedPrefill = prefill
+            selectedPhotoItem = nil
+        } catch {
+            photoProcessingError = "OCR failed. You can still use Manual Entry."
+        }
+    }
+#endif
 
     private var recentActivity: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -207,6 +271,156 @@ private struct HomeView: View {
                 }
             }
         }
+    }
+}
+
+#if os(iOS)
+private enum ReceiptOCRService {
+    static func extractText(from cgImage: CGImage) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let request = VNRecognizeTextRequest { request, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                guard let observations = request.results as? [VNRecognizedTextObservation] else {
+                    continuation.resume(returning: "")
+                    return
+                }
+
+                let lines = observations.compactMap { observation in
+                    observation.topCandidates(1).first?.string
+                }
+
+                continuation.resume(returning: lines.joined(separator: "\n"))
+            }
+
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+
+            do {
+                try handler.perform([request])
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+}
+#endif
+
+private enum ReceiptOCRParser {
+    private static let ignoredLineTokens = [
+        "subtotal",
+        "total",
+        "tax",
+        "tip",
+        "gratuity",
+        "balance",
+        "amount due"
+    ]
+
+    static func prefill(fromRecognizedText text: String) -> ManualEntryPrefill {
+        let lines = text
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let merchant = detectMerchantName(lines: lines)
+        let tax = detectAmount(forKeywords: ["tax"], lines: lines)
+        let tip = detectAmount(forKeywords: ["tip", "gratuity"], lines: lines)
+        let items = detectItems(lines: lines)
+
+        return ManualEntryPrefill(
+            merchantName: merchant,
+            tax: tax,
+            tip: tip,
+            items: items
+        )
+    }
+
+    private static func detectMerchantName(lines: [String]) -> String {
+        for line in lines.prefix(5) {
+            let lower = line.lowercased()
+            if lower.rangeOfCharacter(from: .letters) == nil { continue }
+            if ignoredLineTokens.contains(where: { lower.contains($0) }) { continue }
+            return line
+        }
+        return ""
+    }
+
+    private static func detectAmount(forKeywords keywords: [String], lines: [String]) -> String {
+        for line in lines {
+            let lower = line.lowercased()
+            guard keywords.contains(where: { lower.contains($0) }) else { continue }
+            if let amount = extractAmount(from: line) {
+                return amount
+            }
+        }
+        return ""
+    }
+
+    private static func detectItems(lines: [String]) -> [ManualEntryPrefill.Item] {
+        var detected: [ManualEntryPrefill.Item] = []
+
+        for line in lines {
+            guard let amount = extractTrailingAmount(from: line) else { continue }
+            let lower = line.lowercased()
+            if ignoredLineTokens.contains(where: { lower.contains($0) }) { continue }
+
+            let namePortion = line.replacingOccurrences(of: amount, with: "")
+            let cleanedName = namePortion
+                .replacingOccurrences(of: "$", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard cleanedName.count >= 2 else { continue }
+
+            detected.append(
+                ManualEntryPrefill.Item(
+                    name: cleanedName,
+                    quantity: 1,
+                    price: amount
+                )
+            )
+        }
+
+        if detected.isEmpty {
+            return []
+        }
+
+        return Array(detected.prefix(12))
+    }
+
+    private static func extractAmount(from line: String) -> String? {
+        let pattern = #"([0-9]+(?:\.[0-9]{1,2})?)"#
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.matches(
+                in: line,
+                range: NSRange(line.startIndex..., in: line)
+            ).last,
+            let amountRange = Range(match.range(at: 1), in: line)
+        else {
+            return nil
+        }
+        return String(line[amountRange])
+    }
+
+    private static func extractTrailingAmount(from line: String) -> String? {
+        let pattern = #"([0-9]+(?:\.[0-9]{1,2})?)\s*$"#
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(
+                in: line,
+                range: NSRange(line.startIndex..., in: line)
+            ),
+            let amountRange = Range(match.range(at: 1), in: line)
+        else {
+            return nil
+        }
+        return String(line[amountRange])
     }
 }
 

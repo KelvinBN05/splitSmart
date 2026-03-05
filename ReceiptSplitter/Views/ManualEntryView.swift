@@ -3,14 +3,31 @@ import SwiftUI
 struct ManualEntryView: View {
     let onReceiptSaved: (Receipt) -> Void
 
-    @State private var merchantName = ""
+    @State private var merchantName: String
     @State private var participantNames = "You"
-    @State private var tax = ""
-    @State private var tip = ""
-    @State private var itemDrafts: [ManualEntryItemDraft] = [ManualEntryItemDraft()]
+    @State private var tax: String
+    @State private var tip: String
+    @State private var itemDrafts: [ManualEntryItemDraft]
     @State private var splitResult: ManualSplitResult?
     @State private var submitErrorMessage: String?
     @State private var isSubmitting = false
+
+    init(prefill: ManualEntryPrefill? = nil, onReceiptSaved: @escaping (Receipt) -> Void) {
+        self.onReceiptSaved = onReceiptSaved
+        _merchantName = State(initialValue: prefill?.merchantName ?? "")
+        _tax = State(initialValue: prefill?.tax ?? "")
+        _tip = State(initialValue: prefill?.tip ?? "")
+
+        let mappedItems = (prefill?.items ?? []).map { item in
+            ManualEntryItemDraft(
+                name: item.name,
+                quantity: item.quantity,
+                price: item.price,
+                assignedParticipantNames: ["You"]
+            )
+        }
+        _itemDrafts = State(initialValue: mappedItems.isEmpty ? [ManualEntryItemDraft()] : mappedItems)
+    }
 
     var body: some View {
         Form {
