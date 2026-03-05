@@ -116,8 +116,6 @@ private struct HomeView: View {
     @State private var isProcessingPhoto = false
     @State private var photoProcessingError: String?
     @State private var parsedPrefill: ManualEntryPrefill?
-    @State private var ocrDebugPayload: OCRDebugPayload?
-    @State private var isShowingOCRDebug = false
 
     var body: some View {
         ScrollView {
@@ -145,16 +143,6 @@ private struct HomeView: View {
         .navigationDestination(item: $parsedPrefill) { prefill in
             ManualEntryView(prefill: prefill, onReceiptSaved: onReceiptSaved)
         }
-#if os(iOS)
-        .sheet(isPresented: $isShowingOCRDebug) {
-            if let payload = ocrDebugPayload {
-                OCRDebugView(payload: payload)
-            } else {
-                Text("No OCR debug data yet.")
-                    .padding()
-            }
-        }
-#endif
     }
 
     private var header: some View {
@@ -238,14 +226,6 @@ private struct HomeView: View {
                     .foregroundStyle(.red)
             }
 
-#if os(iOS)
-            if ocrDebugPayload != nil {
-                Button("Show OCR Debug") {
-                    isShowingOCRDebug = true
-                }
-                .font(.footnote.weight(.semibold))
-            }
-#endif
         }
     }
 
@@ -261,7 +241,7 @@ private struct HomeView: View {
                 photoProcessingError = "Unable to read selected photo."
                 return
             }
-            guard let image = UIImage(data: data), let cgImage = image.cgImage else {
+            guard UIImage(data: data) != nil else {
                 photoProcessingError = "Could not process that image format."
                 return
             }
@@ -270,13 +250,6 @@ private struct HomeView: View {
                 imageData: data,
                 ownerUserID: currentUserID
             )
-
-            // Keep optional local debug available for parser comparison when needed.
-            if let localScan = try? await ReceiptOCRService.extractScan(from: cgImage) {
-                ocrDebugPayload = OCRDebugPayload(scan: localScan, prefill: prefill)
-            } else {
-                ocrDebugPayload = nil
-            }
 
             parsedPrefill = prefill
             selectedPhotoItem = nil
@@ -380,11 +353,22 @@ private enum DocumentAIOCRJobService {
     }
 
     private static func mapPrefill(from result: [String: Any]) -> ManualEntryPrefill {
-        let merchantName = (result["merchantName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let tax = normalizeAmount(result["tax"])
-        let tip = normalizeAmount(result["tip"])
+        let canonicalResult: [String: Any]
+        if
+            result["merchantName"] == nil,
+            let nested = result["items"] as? [String: Any],
+            nested["merchantName"] != nil || nested["items"] != nil
+        {
+            canonicalResult = nested
+        } else {
+            canonicalResult = result
+        }
 
-        let itemsRaw = result["items"] as? [[String: Any]] ?? []
+        let merchantName = (canonicalResult["merchantName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tax = normalizeAmount(canonicalResult["tax"])
+        let tip = normalizeAmount(canonicalResult["tip"])
+
+        let itemsRaw = canonicalResult["items"] as? [[String: Any]] ?? []
         let items = itemsRaw.compactMap { raw -> ManualEntryPrefill.Item? in
             let name = (raw["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !name.isEmpty else { return nil }
