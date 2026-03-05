@@ -6,7 +6,7 @@ const { DocumentProcessorServiceClient } = require("@google-cloud/documentai");
 admin.initializeApp();
 
 const documentAIClient = new DocumentProcessorServiceClient();
-const PARSER_VERSION = "docai-v4-2026-03-05";
+const PARSER_VERSION = "docai-v6-2026-03-05";
 
 exports.processOCRJob = functions.firestore
   .document("users/{userId}/ocrJobs/{jobId}")
@@ -99,7 +99,7 @@ function mapReceiptFromDocumentAI(document) {
   const tip = normalizeAmount(firstEntityText(entities, ["tip_amount", "tip"])) || "";
 
   const lineItems = entities.filter((entity) => entity.type === "line_item");
-  let items = lineItems
+  const entityItems = lineItems
     .map((lineItem) => {
       const props = lineItem.properties || [];
       const name =
@@ -112,25 +112,32 @@ function mapReceiptFromDocumentAI(document) {
       const price = normalizeAmount(priceRaw);
       if (!name || !price) return null;
 
-      return { name, quantity, price };
+      return { name: cleanItemName(name), quantity, price };
     })
     .filter(Boolean);
 
-  // Fallback: some processors return sparse entities; parse from raw OCR text.
-  if (!items.length) {
-    items = parseItemsFromLines(lines);
-  }
-  if (!items.length) {
-    items = parseItemsFromRawText(rawText);
-  }
+  const layout = classifyReceiptLayout(lines, lineItems.length);
+  const candidates = [
+    { name: "entity", items: aggregateItems(entityItems) },
+    { name: "paired-lines", items: parseItemsFromLines(lines) },
+    { name: "single-line", items: parseItemsInline(lines) },
+    { name: "raw-text", items: parseItemsFromRawText(rawText) },
+  ];
+  const scoredCandidates = candidates.map((candidate) => ({
+    name: candidate.name,
+    items: candidate.items,
+    score: scoreCandidate(candidate.items, lines, layout),
+  }));
+  const bestCandidate = scoredCandidates.reduce((best, current) =>
+    current.score > best.score ? current : best
+  , { name: "none", items: [], score: -1 });
+  const items = bestCandidate.items;
 
   const taxFromLines = parseTaxFromLines(lines);
   const taxFromRawText = parseTaxFromRawText(rawText);
   const normalizedTax = tax || taxFromLines || taxFromRawText;
 
-  const parseMode = lineItems.length
-    ? (items.length ? "entity+fallback" : "entity-only")
-    : (items.length ? "text-fallback" : "no-items");
+  const parseMode = `${layout.kind}->${bestCandidate.name}`;
 
   return {
     merchantName,
@@ -140,10 +147,16 @@ function mapReceiptFromDocumentAI(document) {
     debug: {
       parserVersion: PARSER_VERSION,
       parseMode,
+      layoutKind: layout.kind,
       entityCount: entities.length,
       lineItemEntityCount: lineItems.length,
       lineCount: lines.length,
       itemCount: items.length,
+      candidateScores: scoredCandidates.map((candidate) => ({
+        name: candidate.name,
+        score: candidate.score,
+        itemCount: candidate.items.length,
+      })),
       lineContent: lines.slice(0, 220),
       rawTextPreview: rawText.slice(0, 2400),
       taxSource: tax
@@ -151,6 +164,54 @@ function mapReceiptFromDocumentAI(document) {
         : (taxFromLines ? "lines" : (taxFromRawText ? "raw_text" : "none")),
     },
   };
+}
+
+function classifyReceiptLayout(lines, lineItemEntityCount) {
+  const stopAt = lines.findIndex((line) => /subtotal|^total\b/i.test(String(line)));
+  const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
+  const priceOnlyCount = window.filter((line) => /^[0-9]+\.[0-9]{2}\s*[A-Z]?$/.test(String(line).trim())).length;
+  const upcOnlyCount = window.filter((line) => /^\d{6,14}$/.test(String(line).trim())).length;
+  const inlineItemCount = window.filter((line) =>
+    /^(.+?)\s+(?:\d{6,14}\s+)?([0-9]+\.[0-9]{2})\s*[A-Z]?$/.test(String(line).trim())
+  ).length;
+
+  if (lineItemEntityCount >= 3) return { kind: "entity-rich", priceOnlyCount, upcOnlyCount, inlineItemCount };
+  if (priceOnlyCount >= 3 && upcOnlyCount >= 3) return { kind: "paired-lines", priceOnlyCount, upcOnlyCount, inlineItemCount };
+  if (inlineItemCount >= 5) return { kind: "single-line", priceOnlyCount, upcOnlyCount, inlineItemCount };
+  return { kind: "mixed", priceOnlyCount, upcOnlyCount, inlineItemCount };
+}
+
+function scoreCandidate(items, lines, layout) {
+  if (!items.length) return 0;
+  const stopAt = lines.findIndex((line) => /subtotal|^total\b/i.test(String(line)));
+  const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
+
+  let score = 0;
+  score += Math.min(40, items.length * 2);
+  score += items.reduce((sum, item) => sum + Math.min(3, Number(item.quantity || 1)), 0);
+
+  const namesWithLetters = items.filter((item) => /[a-z]/i.test(String(item.name))).length;
+  score += namesWithLetters;
+
+  const noisyItems = items.filter((item) => !looksLikeItemName(item.name)).length;
+  score -= noisyItems * 5;
+
+  const uniqueNames = new Set(items.map((item) => String(item.name || "").toLowerCase())).size;
+  score += Math.min(10, uniqueNames);
+
+  if (layout.kind === "paired-lines") {
+    const priceOnlyCount = layout.priceOnlyCount || 0;
+    if (priceOnlyCount >= 3) score += 8;
+  }
+  if (layout.kind === "single-line") {
+    const inlineItemCount = layout.inlineItemCount || 0;
+    if (inlineItemCount >= 5) score += 8;
+  }
+
+  const subtotalIndex = window.findIndex((line) => /subtotal/i.test(String(line)));
+  if (subtotalIndex >= 0 && items.length > 0) score += 4;
+
+  return score;
 }
 
 function firstEntityText(entities, types) {
@@ -208,49 +269,91 @@ function textFromLayout(layout, fullText) {
 }
 
 function parseTaxFromLines(lines) {
+  const totals = parseTotalsFromLines(lines);
+  const collectedTaxes = [];
   for (let i = 0; i < lines.length; i += 1) {
     const line = String(lines[i] || "");
     if (!/tax/i.test(line)) continue;
 
     // Case 1: "TAX ... 4.59"
     const inline = line.match(/([0-9]+\.[0-9]{2})\s*$/);
-    if (inline) return normalizeAmount(inline[1]);
+    if (inline) {
+      const value = Number(inline[1]);
+      if (!Number.isNaN(value)) collectedTaxes.push(value);
+      continue;
+    }
 
     // Case 2: split lines: "TAX 1" then "6.750 %" then "4.59"
+    const candidates = [];
     for (let lookahead = i + 1; lookahead <= Math.min(i + 3, lines.length - 1); lookahead += 1) {
-      const m = String(lines[lookahead] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
-      if (!m) continue;
-      const value = Number(m[1]);
-      if (!Number.isNaN(value) && value < 1) continue; // skip percentage-like values e.g. 0.0675
-      return normalizeAmount(m[1]);
+      const look = String(lines[lookahead] || "");
+      const matches = look.match(/[0-9]+\.[0-9]{2}/g) || [];
+      for (const raw of matches) {
+        const value = Number(raw);
+        if (!Number.isNaN(value) && value < 1) continue; // skip percentage-like values e.g. 0.0675
+        candidates.push(value);
+      }
+    }
+    if (candidates.length === 1) {
+      collectedTaxes.push(candidates[0]);
+      continue;
+    }
+    if (candidates.length > 1) {
+      const plausible = candidates.filter((value) => {
+        if (totals.subtotal > 0) return value < totals.subtotal * 0.35;
+        if (totals.total > 0) return value < totals.total * 0.35;
+        return true;
+      });
+      const source = plausible.length ? plausible : candidates;
+      const chosen = source.reduce((min, value) => (value < min ? value : min), source[0]);
+      collectedTaxes.push(chosen);
     }
   }
-  return "";
+  const unique = Array.from(new Set(collectedTaxes.map((value) => value.toFixed(2)))).map(Number);
+  if (!unique.length) return "";
+  const sum = unique.reduce((acc, value) => acc + value, 0);
+  return normalizeAmount(sum.toFixed(2));
 }
 
 function parseItemsFromLines(lines) {
   const stopAt = lines.findIndex((line) => /subtotal|^total\b/i.test(String(line)));
   const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
-  const noise = /(st#|op#|te#|tr#|approval|ref\s*#|trans|payment|service|validation|thank you|visa|debit|terminal|change due|items sold|manager|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due|save money|live better|^\(|bluebell|new philadelphia|walmart|^\*+$|^[\-–—]$)/i;
+  const noise = /(st#|op#|te#|tr#|approval|ref\s*#|trans|payment|service|validation|thank you|visa|debit|terminal|change due|items sold|manager|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due|save money|live better|^\(|bluebell|new philadelphia|walmart|^\*+$|^[\-–—]$|^check:|^opened:|^order:|^order type:|^name:|^server:|pay with cash|^saved\b|^cartwheel\b|redcard savings|health-beauty-cosmetics|^home$|^grocery$|^cleaning supplies$|expires)/i;
   const bySig = new Map();
 
   // Pass 1: robust grouped parsing for tokenized lines
   for (let i = 0; i < window.length; i += 1) {
     const line = String(window[i] || "").trim();
     if (!line || noise.test(line)) continue;
+    if (isQuantitySummaryLine(line)) continue;
 
     // Ignore UPC-only and price-only lines as candidate names
     if (/^\d{6,14}$/.test(line)) continue;
     if (/^[0-9]+\.[0-9]{2}\s*[A-Z]?$/.test(line)) continue;
 
-    // Candidate item name line. Look ahead for a nearby price line.
+    // Case A: same-line item + price.
+    const sameLine = parseInlineItemLine(line);
+    if (sameLine) {
+      const sig = `${sameLine.name.toLowerCase()}|${sameLine.price}`;
+      const existing = bySig.get(sig);
+      if (existing) {
+        existing.quantity += sameLine.quantity;
+      } else {
+        bySig.set(sig, sameLine);
+      }
+      if (bySig.size >= 60) break;
+      continue;
+    }
+
+    // Case B: name line with nearby price line.
     let foundPrice = "";
     let consumedUntil = i;
     for (let j = i + 1; j <= Math.min(i + 3, window.length - 1); j += 1) {
       const candidate = String(window[j] || "").trim();
-      const priceMatch = candidate.match(/^([0-9]+\.[0-9]{2})\s*[A-Z]?$/);
-      if (priceMatch) {
-        foundPrice = normalizeAmount(priceMatch[1]);
+      if (noise.test(candidate) || isQuantitySummaryLine(candidate)) continue;
+      const priceFromCandidate = extractPriceFromLine(candidate);
+      if (priceFromCandidate) {
+        foundPrice = priceFromCandidate;
         consumedUntil = j;
         break;
       }
@@ -277,25 +380,40 @@ function parseItemsFromLines(lines) {
   if (!bySig.size) {
     for (const line of window) {
       if (noise.test(line)) continue;
-      const m = String(line).match(/^(.+?)\s+(?:\d{6,14}\s+)?([0-9]+\.[0-9]{2})\s*[A-Z]?$/);
-      if (!m) continue;
-
-      const name = cleanItemName(m[1]);
-      const price = normalizeAmount(m[2]);
-      if (!name || !price || !looksLikeItemName(name)) continue;
-      const quantity = extractQuantityFromLine(name);
-      const sig = `${name.toLowerCase()}|${price}`;
+      if (isQuantitySummaryLine(line)) continue;
+      const parsed = parseInlineItemLine(String(line));
+      if (!parsed) continue;
+      const sig = `${parsed.name.toLowerCase()}|${parsed.price}`;
       const existing = bySig.get(sig);
       if (existing) {
-        existing.quantity += quantity;
+        existing.quantity += parsed.quantity;
       } else {
-        bySig.set(sig, { name, quantity, price });
+        bySig.set(sig, parsed);
       }
       if (bySig.size >= 60) break;
     }
   }
 
   return Array.from(bySig.values());
+}
+
+function parseItemsInline(lines) {
+  const stopAt = lines.findIndex((line) => /subtotal|^total\b/i.test(String(line)));
+  const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
+  const out = [];
+
+  for (const raw of window) {
+    const line = String(raw || "").trim();
+    if (!line) continue;
+    if (isQuantitySummaryLine(line)) continue;
+    if (!looksLikePotentialItemLine(line)) continue;
+
+    const parsed = parseInlineItemLine(line);
+    if (!parsed) continue;
+    out.push(parsed);
+  }
+
+  return aggregateItems(out);
 }
 
 function parseTaxFromRawText(text) {
@@ -345,14 +463,31 @@ function parseItemsFromRawText(text) {
     if (bySig.size >= 60) break;
   }
 
-  return Array.from(bySig.values());
+  return aggregateItems(Array.from(bySig.values()));
 }
 
 function looksLikeItemName(name) {
   const lower = String(name || "").toLowerCase();
   if (lower.length < 2) return false;
   if (!/[a-z]/i.test(lower)) return false;
-  if (/(st#|op#|te#|tr#|approval|ref\s*#|trans|payment|service|validation|visa|debit|terminal|items sold|manager|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due)/i.test(lower)) {
+  if (
+    /(st#|op#|te#|tr#|approval|ref\s*#|trans|payment|service|validation|visa|debit|terminal|items sold|manager|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due|check:|opened:|order:|order type:|name:|server:|table\s+\d+|pay with cash|^saved\b|^cartwheel\b|redcard savings|expires|health-beauty-cosmetics)/i.test(
+      lower
+    )
+  ) {
+    return false;
+  }
+  // Drop fragments that are just department flags and currency markers.
+  if (/^(fc|t|i)\s*\$?$/.test(lower)) return false;
+  return true;
+}
+
+function looksLikePotentialItemLine(line) {
+  const lower = String(line || "").toLowerCase();
+  if (!lower) return false;
+  if (/^\d{6,14}$/.test(lower)) return false;
+  if (/^[0-9]+\.[0-9]{2}\s*[a-z]?$/.test(lower)) return false;
+  if (/(approval|ref\s*#|trans|payment|service|validation|visa|debit|terminal|items sold|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due)/i.test(lower)) {
     return false;
   }
   return true;
@@ -360,11 +495,35 @@ function looksLikeItemName(name) {
 
 function cleanItemName(name) {
   return String(name || "")
+    .replace(/^\s*\d+\s+(?=[A-Za-z])/g, "")
     .replace(/^\s*\d+\s*[xX]\s+/g, "")
     .replace(/\bqty[:\s]*\d+\b/gi, "")
+    .replace(/\b(?:FC|T|I)\s*\$$/i, "")
+    .replace(/\b(?:FC|T|I)\b/gi, "")
+    .replace(/\[$/g, "")
+    .replace(/↓/g, "")
+    .replace(/\$[0-9]+\.[0-9]{2}\s*$/g, "")
     .replace(/\b\d{6,14}\b/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+function aggregateItems(items) {
+  const bySig = new Map();
+  for (const item of items || []) {
+    const name = cleanItemName(item?.name || "");
+    const price = normalizeAmount(item?.price || "");
+    const quantity = Math.max(1, parseInt(item?.quantity, 10) || 1);
+    if (!name || !price || !looksLikeItemName(name)) continue;
+    const sig = `${name.toLowerCase()}|${price}`;
+    const existing = bySig.get(sig);
+    if (existing) {
+      existing.quantity += quantity;
+    } else {
+      bySig.set(sig, { name, quantity, price });
+    }
+  }
+  return Array.from(bySig.values());
 }
 
 function extractQuantityFromLine(line) {
@@ -380,13 +539,69 @@ function extractQuantityFromLine(line) {
 }
 
 function detectMerchantFromLines(lines) {
+  const joined = lines.join(" ").toLowerCase();
+  if (/\bredcard\b/.test(joined) || /\bcartwheel\b/.test(joined)) return "Target";
   for (const raw of lines.slice(0, 12)) {
     const line = String(raw || "").trim();
     if (!line) continue;
+    if (line.length <= 2) continue;
+    if (/\b\d{2}\/\d{2}\/\d{2,4}\b/.test(line)) continue;
+    if (/\b\d{1,2}:\d{2}\s*(am|pm)\b/i.test(line)) continue;
     if (/^\d+$/.test(line)) continue;
-    if (/(save money|live better|manager|st#|op#|te#|tr#|bluebell|new philadelphia|\(\s*\d{3}\s*\))/i.test(line)) continue;
+    if (/(save money|live better|manager|st#|op#|te#|tr#|bluebell|new philadelphia|\(\s*\d{3}\s*\)|check:|opened:|order:|server:|name:)/i.test(line)) continue;
     if (line.length > 48) continue;
     return line.replace(/[®Ⓡ]/g, "").trim();
   }
   return "";
+}
+
+function parseInlineItemLine(line) {
+  const value = String(line || "").trim();
+  if (!value) return null;
+
+  const price = extractPriceFromLine(value);
+  if (!price) return null;
+
+  const namePart = value.replace(/(?:[A-Z]{1,3}\s*)?\$?[0-9]+\.[0-9]{2}\s*[A-Z]?\s*$/, "").trim();
+  const name = cleanItemName(namePart);
+  if (!name || !price || !looksLikeItemName(name)) return null;
+
+  return { name, quantity: extractQuantityFromLine(value), price };
+}
+
+function extractPriceFromLine(line) {
+  const value = String(line || "").trim();
+  if (!value) return "";
+  const match = value.match(/(?:[A-Z]{1,3}\s*)?\$?([0-9]+\.[0-9]{2})\s*[A-Z]?\s*[↓-]?\s*$/);
+  if (!match) return "";
+  return normalizeAmount(match[1]);
+}
+
+function isQuantitySummaryLine(line) {
+  const value = String(line || "").trim().toLowerCase();
+  if (!value) return false;
+  if (/^\d+\s*@\s*\$?\d+\.\d{2}\s*ea$/.test(value)) return true;
+  if (/^\d+\s*x\s*\$?\d+\.\d{2}$/.test(value)) return true;
+  return false;
+}
+
+function parseTotalsFromLines(lines) {
+  let subtotal = 0;
+  let total = 0;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = String(lines[i] || "");
+    const subtotalMatch = line.match(/subtotal[^0-9]*([0-9]+\.[0-9]{2})/i);
+    if (subtotalMatch) subtotal = Number(subtotalMatch[1]) || subtotal;
+    const totalMatch = line.match(/^total[^0-9]*([0-9]+\.[0-9]{2})/i);
+    if (totalMatch) total = Number(totalMatch[1]) || total;
+    if (/subtotal/i.test(line) && i + 1 < lines.length) {
+      const next = String(lines[i + 1] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
+      if (next) subtotal = Number(next[1]) || subtotal;
+    }
+    if (/^total\b/i.test(line) && i + 1 < lines.length) {
+      const next = String(lines[i + 1] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
+      if (next) total = Number(next[1]) || total;
+    }
+  }
+  return { subtotal, total };
 }
