@@ -6,13 +6,30 @@ import AppKit
 #endif
 
 struct ContentView: View {
-    @State private var receipts = DemoData.receipts
+    let currentUser: AppUser
+    let receiptRepository: ReceiptRepository
+
+    @State private var receipts: [Receipt] = []
+    @State private var isLoadingReceipts = false
+    @State private var loadErrorMessage: String?
+
+    init(currentUser: AppUser, receiptRepository: ReceiptRepository = FirestoreReceiptRepository()) {
+        self.currentUser = currentUser
+        self.receiptRepository = receiptRepository
+    }
 
     var body: some View {
         TabView {
             NavigationStack {
                 HomeView(receipts: receipts) { newReceipt in
                     receipts.insert(newReceipt, at: 0)
+                    Task {
+                        do {
+                            try await receiptRepository.saveReceipt(newReceipt, ownerUserId: currentUser.id)
+                        } catch {
+                            loadErrorMessage = "Saved locally, but failed to sync to cloud."
+                        }
+                    }
                 }
             }
             .tabItem {
@@ -34,6 +51,32 @@ struct ContentView: View {
             }
         }
         .tint(Color(red: 0.04, green: 0.45, blue: 0.95))
+        .task {
+            await loadReceipts()
+        }
+        .alert("Sync Error", isPresented: Binding(
+            get: { loadErrorMessage != nil },
+            set: { if !$0 { loadErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(loadErrorMessage ?? "Unknown error")
+        }
+    }
+
+    private func loadReceipts() async {
+        guard !isLoadingReceipts else { return }
+        isLoadingReceipts = true
+        defer { isLoadingReceipts = false }
+
+        do {
+            receipts = try await receiptRepository.fetchReceipts(ownerUserId: currentUser.id)
+        } catch {
+            loadErrorMessage = "Failed to load cloud receipts."
+            if receipts.isEmpty {
+                receipts = DemoData.receipts
+            }
+        }
     }
 }
 
@@ -349,6 +392,6 @@ private enum DemoData {
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
-        ContentView()
+        ContentView(currentUser: AppUser(id: "preview-user", email: "preview@example.com"))
     }
 }

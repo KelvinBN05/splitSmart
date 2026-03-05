@@ -30,7 +30,7 @@ struct AuthGateView: View {
                 .padding(.vertical, 10)
                 .background(.thinMaterial)
 
-                ContentView()
+                ContentView(currentUser: user)
             }
         }
     }
