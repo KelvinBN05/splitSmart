@@ -9,12 +9,18 @@ final class FirestoreUserProfileRepository: UserProfileRepository {
     }
 
     func upsertUserProfile(for user: AppUser) async throws {
-        let data: [String: Any] = [
+        let ref = db.collection("users").document(user.id)
+        let snapshot = try await ref.getDocument()
+
+        var data: [String: Any] = [
             "email": user.email ?? "",
-            "updatedAt": FieldValue.serverTimestamp(),
-            "createdAt": FieldValue.serverTimestamp()
+            "updatedAt": FieldValue.serverTimestamp()
         ]
 
-        try await db.collection("users").document(user.id).setData(data, merge: true)
+        if snapshot.exists == false {
+            data["createdAt"] = FieldValue.serverTimestamp()
+        }
+
+        try await ref.setData(data, merge: true)
     }
 }

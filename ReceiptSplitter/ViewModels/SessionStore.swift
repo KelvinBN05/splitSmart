@@ -14,6 +14,7 @@ final class SessionStore: ObservableObject {
 
     private let authService: AuthService
     private let userProfileRepository: UserProfileRepository
+    private var authStateObserver: NSObjectProtocol?
 
     init(
         authService: AuthService = FirebaseAuthService(),
@@ -21,6 +22,11 @@ final class SessionStore: ObservableObject {
     ) {
         self.authService = authService
         self.userProfileRepository = userProfileRepository
+        self.authStateObserver = authService.observeAuthState { [weak self] appUser in
+            Task { @MainActor in
+                self?.state = appUser.map(State.signedIn) ?? .signedOut
+            }
+        }
         restoreSession()
     }
 
@@ -48,7 +54,6 @@ final class SessionStore: ObservableObject {
             authErrorMessage = "Sign in timed out. Check your connection and try again."
         } catch {
             let nsError = error as NSError
-            print("AUTH ERROR [signIn] domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
             authErrorMessage = readableAuthError(from: nsError, fallback: error.localizedDescription)
         }
     }
@@ -69,7 +74,6 @@ final class SessionStore: ObservableObject {
             authErrorMessage = "Create account timed out. Check your connection and try again."
         } catch {
             let nsError = error as NSError
-            print("AUTH ERROR [signUp] domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
             authErrorMessage = readableAuthError(from: nsError, fallback: error.localizedDescription)
         }
     }

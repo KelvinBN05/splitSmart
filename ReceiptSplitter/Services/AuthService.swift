@@ -7,6 +7,8 @@ struct AppUser: Equatable {
 
 protocol AuthService {
     func currentUser() -> AppUser?
+    func observeAuthState(_ onChange: @escaping (AppUser?) -> Void) -> NSObjectProtocol
+    func removeAuthStateObserver(_ observer: NSObjectProtocol)
     func signIn(email: String, password: String) async throws -> AppUser
     func signUp(email: String, password: String) async throws -> AppUser
     func signOut() throws

@@ -11,11 +11,9 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read, write: if isOwner(userId);
-    }
-
-    match /receipts/{receiptId} {
-      allow create: if isSignedIn() && request.resource.data.ownerUserId == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && resource.data.ownerUserId == request.auth.uid;
+      match /receipts/{receiptId} {
+        allow read, write: if isOwner(userId);
+      }
     }
   }
 }

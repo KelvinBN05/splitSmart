@@ -7,6 +7,17 @@ final class FirebaseAuthService: AuthService {
         return AppUser(id: user.uid, email: user.email)
     }
 
+    func observeAuthState(_ onChange: @escaping (AppUser?) -> Void) -> NSObjectProtocol {
+        Auth.auth().addStateDidChangeListener { _, user in
+            let appUser = user.map { AppUser(id: $0.uid, email: $0.email) }
+            onChange(appUser)
+        }
+    }
+
+    func removeAuthStateObserver(_ observer: NSObjectProtocol) {
+        Auth.auth().removeStateDidChangeListener(observer)
+    }
+
     func signIn(email: String, password: String) async throws -> AppUser {
         let result = try await Auth.auth().signIn(withEmail: email, password: password)
         return AppUser(id: result.user.uid, email: result.user.email)

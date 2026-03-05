@@ -1,4 +1,5 @@
 import SwiftUI
+import FirebaseFirestore
 #if os(iOS)
 import UIKit
 #elseif os(macOS)
@@ -58,6 +59,11 @@ struct ContentView: View {
             get: { loadErrorMessage != nil },
             set: { if !$0 { loadErrorMessage = nil } }
         )) {
+            Button("Retry") {
+                Task {
+                    await loadReceipts()
+                }
+            }
             Button("OK", role: .cancel) {}
         } message: {
             Text(loadErrorMessage ?? "Unknown error")
@@ -72,11 +78,26 @@ struct ContentView: View {
         do {
             receipts = try await receiptRepository.fetchReceipts(ownerUserId: currentUser.id)
         } catch {
-            loadErrorMessage = "Failed to load cloud receipts."
-            if receipts.isEmpty {
-                receipts = DemoData.receipts
+            loadErrorMessage = readableCloudErrorMessage(from: error)
+        }
+    }
+
+    private func readableCloudErrorMessage(from error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == FirestoreErrorDomain {
+            switch nsError.code {
+            case 7: // permissionDenied
+                return "Permission denied. Check Firestore rules and sign-in state."
+            case 14, 4: // unavailable, deadlineExceeded
+                return "Cloud service unavailable. Check your connection and retry."
+            default:
+                return "Cloud sync failed. Please try again."
             }
         }
+        if nsError.domain == NSURLErrorDomain {
+            return "Network error. Check your connection and try again."
+        }
+        return "Cloud sync failed. Please try again."
     }
 }
 
@@ -178,8 +199,12 @@ private struct HomeView: View {
                     .foregroundStyle(.blue)
             }
 
-            ForEach(receipts.prefix(2)) { receipt in
-                ActivityRow(receipt: receipt)
+            if receipts.isEmpty {
+                EmptyActivityCard()
+            } else {
+                ForEach(receipts.prefix(2)) { receipt in
+                    ActivityRow(receipt: receipt)
+                }
             }
         }
     }
@@ -260,21 +285,52 @@ private struct HistoryView: View {
     let receipts: [Receipt]
 
     var body: some View {
-        List(receipts) { receipt in
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(receipt.merchantName)
-                    Text(Formatters.numericDate.string(from: receipt.createdAt))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+        Group {
+            if receipts.isEmpty {
+                ContentUnavailableView(
+                    "No Receipts Yet",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text("Add a receipt from Home to see your history.")
+                )
+            } else {
+                List(receipts) { receipt in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(receipt.merchantName)
+                            Text(Formatters.numericDate.string(from: receipt.createdAt))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(Formatters.currencyString(from: receipt.total))
+                            .fontWeight(.semibold)
+                    }
+                    .padding(.vertical, 4)
                 }
-                Spacer()
-                Text(Formatters.currencyString(from: receipt.total))
-                    .fontWeight(.semibold)
             }
-            .padding(.vertical, 4)
         }
         .navigationTitle("History")
+    }
+}
+
+private struct EmptyActivityCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No activity yet")
+                .font(.headline)
+                .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+            Text("Create your first receipt from Manual Entry.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        )
     }
 }
 

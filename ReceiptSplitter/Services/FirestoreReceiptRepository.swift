@@ -10,18 +10,32 @@ final class FirestoreReceiptRepository: ReceiptRepository {
 
     func fetchReceipts(ownerUserId: String) async throws -> [Receipt] {
         let snapshot = try await db
+            .collection("users")
+            .document(ownerUserId)
             .collection("receipts")
-            .whereField("ownerUserId", isEqualTo: ownerUserId)
             .getDocuments()
 
         return snapshot.documents.compactMap { document in
-            decodeReceipt(from: document)
+            FirestoreReceiptMapper.decodeReceipt(documentID: document.documentID, data: document.data())
         }
         .sorted { $0.createdAt > $1.createdAt }
     }
 
     func saveReceipt(_ receipt: Receipt, ownerUserId: String) async throws {
-        let data: [String: Any] = [
+        let data = FirestoreReceiptMapper.encodeReceipt(receipt, ownerUserId: ownerUserId)
+
+        try await db
+            .collection("users")
+            .document(ownerUserId)
+            .collection("receipts")
+            .document(receipt.id.uuidString)
+            .setData(data, merge: true)
+    }
+}
+
+enum FirestoreReceiptMapper {
+    static func encodeReceipt(_ receipt: Receipt, ownerUserId: String) -> [String: Any] {
+        [
             "ownerUserId": ownerUserId,
             "merchantName": receipt.merchantName,
             "createdAt": Timestamp(date: receipt.createdAt),
@@ -43,13 +57,9 @@ final class FirestoreReceiptRepository: ReceiptRepository {
                 ]
             }
         ]
-
-        try await db.collection("receipts").document(receipt.id.uuidString).setData(data, merge: true)
     }
 
-    private func decodeReceipt(from document: QueryDocumentSnapshot) -> Receipt? {
-        let data = document.data()
-
+    static func decodeReceipt(documentID: String, data: [String: Any]) -> Receipt? {
         guard
             let merchantName = data["merchantName"] as? String,
             let createdAtTimestamp = data["createdAt"] as? Timestamp,
@@ -99,7 +109,7 @@ final class FirestoreReceiptRepository: ReceiptRepository {
         }
 
         return Receipt(
-            id: UUID(uuidString: document.documentID) ?? UUID(),
+            id: UUID(uuidString: documentID) ?? UUID(),
             merchantName: merchantName,
             createdAt: createdAtTimestamp.dateValue(),
             participants: participants,
@@ -109,8 +119,7 @@ final class FirestoreReceiptRepository: ReceiptRepository {
         )
     }
 
-    private func decimalString(_ value: Decimal) -> String {
+    private static func decimalString(_ value: Decimal) -> String {
         NSDecimalNumber(decimal: value).stringValue
     }
 }
-
