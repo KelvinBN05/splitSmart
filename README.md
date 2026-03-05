@@ -40,3 +40,36 @@ Run tests in Xcode (`Cmd + U`) or with:
 ```bash
 xcodebuild test -project ReceiptSplitter.xcodeproj -scheme ReceiptSplitter -destination 'platform=iOS Simulator,name=iPhone 16'
 ```
+
+## Backend OCR (Document AI)
+
+This project now uses a backend OCR job flow for receipt parsing:
+
+1. iOS uploads image to Storage under `users/{uid}/ocrUploads/{jobId}.jpg`
+2. iOS creates Firestore doc `users/{uid}/ocrJobs/{jobId}`
+3. Cloud Function `processOCRJob` calls Document AI and writes parsed fields to `result`
+4. iOS polls job status and opens Manual Entry with prefilled fields
+
+### One-time setup
+
+1. Create a Document AI receipt processor in Google Cloud
+2. Note:
+   - `DOCUMENT_AI_PROJECT_ID`
+   - `DOCUMENT_AI_LOCATION` (e.g. `us`)
+   - `DOCUMENT_AI_PROCESSOR_ID`
+
+### Deploy
+
+```bash
+cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart/functions"
+npm install
+
+cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart"
+firebase functions:config:set \
+  document_ai.project_id="recieptsplitter" \
+  document_ai.location="us" \
+  document_ai.processor_id="YOUR_PROCESSOR_ID"
+
+cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart"
+firebase deploy --only firestore:rules,storage,functions --project recieptsplitter
+```

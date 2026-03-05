@@ -3,6 +3,7 @@ import FirebaseFirestore
 #if os(iOS)
 import UIKit
 import PhotosUI
+import FirebaseStorage
 import Vision
 import CoreImage
 import CoreImage.CIFilterBuiltins
@@ -26,7 +27,7 @@ struct ContentView: View {
     var body: some View {
         TabView {
             NavigationStack {
-                HomeView(receipts: receipts) { newReceipt in
+                HomeView(currentUserID: currentUser.id, receipts: receipts) { newReceipt in
                     receipts.insert(newReceipt, at: 0)
                     Task {
                         do {
@@ -106,6 +107,7 @@ struct ContentView: View {
 }
 
 private struct HomeView: View {
+    let currentUserID: String
     let receipts: [Receipt]
     let onReceiptSaved: (Receipt) -> Void
 #if os(iOS)
@@ -114,6 +116,8 @@ private struct HomeView: View {
     @State private var isProcessingPhoto = false
     @State private var photoProcessingError: String?
     @State private var parsedPrefill: ManualEntryPrefill?
+    @State private var ocrDebugPayload: OCRDebugPayload?
+    @State private var isShowingOCRDebug = false
 
     var body: some View {
         ScrollView {
@@ -141,6 +145,16 @@ private struct HomeView: View {
         .navigationDestination(item: $parsedPrefill) { prefill in
             ManualEntryView(prefill: prefill, onReceiptSaved: onReceiptSaved)
         }
+#if os(iOS)
+        .sheet(isPresented: $isShowingOCRDebug) {
+            if let payload = ocrDebugPayload {
+                OCRDebugView(payload: payload)
+            } else {
+                Text("No OCR debug data yet.")
+                    .padding()
+            }
+        }
+#endif
     }
 
     private var header: some View {
@@ -223,6 +237,15 @@ private struct HomeView: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
+
+#if os(iOS)
+            if ocrDebugPayload != nil {
+                Button("Show OCR Debug") {
+                    isShowingOCRDebug = true
+                }
+                .font(.footnote.weight(.semibold))
+            }
+#endif
         }
     }
 
@@ -243,12 +266,22 @@ private struct HomeView: View {
                 return
             }
 
-            let text = try await ReceiptOCRService.extractText(from: cgImage)
-            let prefill = ReceiptOCRParser.prefill(fromRecognizedText: text)
+            let prefill = try await DocumentAIOCRJobService.createAndAwaitOCRJob(
+                imageData: data,
+                ownerUserID: currentUserID
+            )
+
+            // Keep optional local debug available for parser comparison when needed.
+            if let localScan = try? await ReceiptOCRService.extractScan(from: cgImage) {
+                ocrDebugPayload = OCRDebugPayload(scan: localScan, prefill: prefill)
+            } else {
+                ocrDebugPayload = nil
+            }
+
             parsedPrefill = prefill
             selectedPhotoItem = nil
         } catch {
-            photoProcessingError = "OCR failed. You can still use Manual Entry."
+            photoProcessingError = error.localizedDescription
         }
     }
 #endif
@@ -277,13 +310,155 @@ private struct HomeView: View {
 }
 
 #if os(iOS)
+private enum DocumentAIOCRJobService {
+    private static let db = Firestore.firestore()
+    private static let storage = Storage.storage()
+
+    enum OCRJobError: LocalizedError {
+        case timedOut
+        case failed(String)
+        case invalidPayload
+
+        var errorDescription: String? {
+            switch self {
+            case .timedOut:
+                return "OCR timed out. Try again in a moment."
+            case .failed(let message):
+                return message.isEmpty ? "OCR failed." : message
+            case .invalidPayload:
+                return "OCR result payload was invalid."
+            }
+        }
+    }
+
+    static func createAndAwaitOCRJob(imageData: Data, ownerUserID: String) async throws -> ManualEntryPrefill {
+        let jobID = UUID().uuidString
+        let imagePath = "users/\(ownerUserID)/ocrUploads/\(jobID).jpg"
+        let jobRef = db.collection("users").document(ownerUserID).collection("ocrJobs").document(jobID)
+
+        let metadata = StorageMetadata()
+        metadata.contentType = "image/jpeg"
+        _ = try await storage.reference(withPath: imagePath).putDataAsync(imageData, metadata: metadata)
+
+        try await jobRef.setData([
+            "status": "pending",
+            "ownerUserId": ownerUserID,
+            "imagePath": imagePath,
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ], merge: true)
+
+        return try await waitForCompletion(jobRef: jobRef, timeoutSeconds: 60)
+    }
+
+    private static func waitForCompletion(
+        jobRef: DocumentReference,
+        timeoutSeconds: Double
+    ) async throws -> ManualEntryPrefill {
+        let start = Date()
+
+        while Date().timeIntervalSince(start) < timeoutSeconds {
+            let snapshot = try await jobRef.getDocument()
+            let data = snapshot.data() ?? [:]
+            let status = (data["status"] as? String ?? "pending").lowercased()
+
+            switch status {
+            case "completed":
+                guard let result = data["result"] as? [String: Any] else {
+                    throw OCRJobError.invalidPayload
+                }
+                return mapPrefill(from: result)
+            case "failed":
+                let message = data["errorMessage"] as? String ?? "OCR failed."
+                throw OCRJobError.failed(message)
+            default:
+                try await Task.sleep(nanoseconds: 800_000_000)
+            }
+        }
+
+        throw OCRJobError.timedOut
+    }
+
+    private static func mapPrefill(from result: [String: Any]) -> ManualEntryPrefill {
+        let merchantName = (result["merchantName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tax = normalizeAmount(result["tax"])
+        let tip = normalizeAmount(result["tip"])
+
+        let itemsRaw = result["items"] as? [[String: Any]] ?? []
+        let items = itemsRaw.compactMap { raw -> ManualEntryPrefill.Item? in
+            let name = (raw["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !name.isEmpty else { return nil }
+
+            let quantity = max(1, (raw["quantity"] as? Int) ?? 1)
+            let price = normalizeAmount(raw["price"])
+            guard !price.isEmpty else { return nil }
+
+            return ManualEntryPrefill.Item(name: name, quantity: quantity, price: price)
+        }
+
+        return ManualEntryPrefill(
+            merchantName: merchantName,
+            tax: tax,
+            tip: tip,
+            items: items
+        )
+    }
+
+    private static func normalizeAmount(_ raw: Any?) -> String {
+        if let string = raw as? String {
+            let cleaned = string
+                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: ",", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let decimal = Decimal(string: cleaned) else { return "" }
+            return NSDecimalNumber(decimal: decimal).stringValue
+        }
+
+        if let number = raw as? NSNumber {
+            return number.decimalValue.description
+        }
+
+        return ""
+    }
+}
+#endif
+
+private struct OCRSegment: Identifiable, Hashable {
+    let id = UUID()
+    let text: String
+    let confidence: Float
+    let boundingBox: CGRect
+}
+
+private struct OCRRow: Identifiable, Hashable {
+    let id = UUID()
+    let text: String
+    let segments: [OCRSegment]
+    let yCenter: CGFloat
+}
+
+private struct OCRScanData: Hashable {
+    let rows: [OCRRow]
+
+    var lines: [String] {
+        rows.map(\.text)
+    }
+}
+
+private struct OCRDebugPayload: Identifiable {
+    let id = UUID()
+    let scan: OCRScanData
+    let prefill: ManualEntryPrefill
+}
+
+#if os(iOS)
 private enum ReceiptOCRService {
     private static let ciContext = CIContext()
 
-    static func extractText(from cgImage: CGImage) async throws -> String {
+    static func extractScan(from cgImage: CGImage) async throws -> OCRScanData {
         let imageForOCR = preprocessForOCR(cgImage) ?? cgImage
 
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<OCRScanData, Error>) in
             let request = VNRecognizeTextRequest { request, error in
                 if let error {
                     continuation.resume(throwing: error)
@@ -291,19 +466,31 @@ private enum ReceiptOCRService {
                 }
 
                 guard let observations = request.results as? [VNRecognizedTextObservation] else {
-                    continuation.resume(returning: "")
+                    continuation.resume(returning: OCRScanData(rows: []))
                     return
                 }
 
-                let lines = observations.compactMap { observation in
-                    observation.topCandidates(1).first?.string
+                let fragments: [OCRSegment] = observations.compactMap { observation in
+                    guard let candidate = observation.topCandidates(1).first else { return nil }
+                    let text = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !text.isEmpty else { return nil }
+
+                    return OCRSegment(
+                        text: text,
+                        confidence: candidate.confidence,
+                        boundingBox: observation.boundingBox
+                    )
                 }
 
-                continuation.resume(returning: lines.joined(separator: "\n"))
+                let rows = groupStrictRows(from: fragments)
+
+                continuation.resume(returning: OCRScanData(rows: rows))
             }
 
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["en-US"]
+            request.minimumTextHeight = 0.012
 
             let handler = VNImageRequestHandler(cgImage: imageForOCR, options: [:])
 
@@ -333,6 +520,43 @@ private enum ReceiptOCRService {
         guard let sharpened = sharpen.outputImage else { return nil }
 
         return ciContext.createCGImage(sharpened, from: sharpened.extent)
+    }
+
+    private static func groupStrictRows(from fragments: [OCRSegment]) -> [OCRRow] {
+        guard !fragments.isEmpty else { return [] }
+
+        let sorted = fragments.sorted { $0.boundingBox.midY > $1.boundingBox.midY }
+
+        // Tight threshold so only same-row fragments merge.
+        // Prevents the earlier over-merge problem.
+        let yTolerance: CGFloat = 0.0035
+
+        var buckets: [[OCRSegment]] = []
+
+        for fragment in sorted {
+            var assigned = false
+            for index in buckets.indices {
+                let avgY = buckets[index].map(\.boundingBox.midY).reduce(0, +) / CGFloat(buckets[index].count)
+                if abs(avgY - fragment.boundingBox.midY) <= yTolerance {
+                    buckets[index].append(fragment)
+                    assigned = true
+                    break
+                }
+            }
+
+            if !assigned {
+                buckets.append([fragment])
+            }
+        }
+
+        let rows: [OCRRow] = buckets.map { bucket in
+            let segments = bucket.sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+            let text = segments.map(\.text).joined(separator: " ")
+            let yCenter = segments.map(\.boundingBox.midY).reduce(0, +) / CGFloat(segments.count)
+            return OCRRow(text: text, segments: segments, yCenter: yCenter)
+        }
+
+        return rows.sorted { $0.yCenter > $1.yCenter }
     }
 }
 #endif
@@ -364,16 +588,13 @@ private enum ReceiptOCRParser {
         "thank you"
     ]
 
-    static func prefill(fromRecognizedText text: String) -> ManualEntryPrefill {
-        let lines = text
-            .split(separator: "\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+    static func prefill(from scan: OCRScanData) -> ManualEntryPrefill {
+        let lines = scan.lines
 
         let merchant = detectMerchantName(lines: lines)
         let tax = detectAmount(forKeywords: ["tax"], lines: lines)
         let tip = detectAmount(forKeywords: ["tip", "gratuity"], lines: lines)
-        let items = detectItems(lines: lines)
+        let items = detectItems(rows: scan.rows)
 
         return ManualEntryPrefill(
             merchantName: merchant,
@@ -404,29 +625,32 @@ private enum ReceiptOCRParser {
         return ""
     }
 
-    private static func detectItems(lines: [String]) -> [ManualEntryPrefill.Item] {
+    private static func detectItems(rows: [OCRRow]) -> [ManualEntryPrefill.Item] {
+        let boundaryItems = detectItems(rows: rows, useSubtotalBoundary: true)
+        if !boundaryItems.isEmpty {
+            return boundaryItems
+        }
+        let allRowItems = detectItems(rows: rows, useSubtotalBoundary: false)
+        if !allRowItems.isEmpty {
+            return allRowItems
+        }
+        return detectItemsFallback(rows: rows)
+    }
+
+    private static func detectItems(rows: [OCRRow], useSubtotalBoundary: Bool) -> [ManualEntryPrefill.Item] {
         var detected: [ManualEntryPrefill.Item] = []
         var seenSignatures = Set<String>()
+        let candidateRows = useSubtotalBoundary ? rowsForItemParsing(from: rows) : rows
 
-        for line in lines {
-            let lower = line.lowercased()
+        for row in candidateRows {
+            let lower = row.text.lowercased()
             if shouldIgnoreItemLine(lowercasedLine: lower) { continue }
 
-            guard let amount = extractTrailingAmount(from: line) else { continue }
-            guard let normalizedAmount = normalizeAmount(amount) else { continue }
+            guard let parsed = parseRetailItemRow(row) else { continue }
+            let normalizedAmount = parsed.price
             if normalizedAmount == "0" || normalizedAmount == "0.0" || normalizedAmount == "0.00" { continue }
-
-            let quantity = extractQuantity(from: line)
-
-            let namePortion = line.replacingOccurrences(
-                of: #"\$?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?\s*$"#,
-                with: "",
-                options: .regularExpression
-            )
-            let cleanedName = namePortion
-                .replacingOccurrences(of: #"\b\d+\s*[xX]\s*"#, with: "", options: .regularExpression)
-                .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanedName = parsed.name
+            let quantity = parsed.quantity
 
             guard cleanedName.count >= 2 else { continue }
             guard cleanedName.rangeOfCharacter(from: .letters) != nil else { continue }
@@ -444,15 +668,70 @@ private enum ReceiptOCRParser {
             )
         }
 
-        if detected.isEmpty {
-            return []
-        }
-
         return Array(detected.prefix(12))
     }
 
+    private static func detectItemsFallback(rows: [OCRRow]) -> [ManualEntryPrefill.Item] {
+        var results: [ManualEntryPrefill.Item] = []
+        var seenSignatures = Set<String>()
+
+        for row in rows {
+            let lower = row.text.lowercased()
+            if shouldIgnoreItemLine(lowercasedLine: lower) { continue }
+            guard let parsed = parseLooseItemLine(row.text) else { continue }
+
+            let signature = "\(parsed.name.lowercased())|\(parsed.price)"
+            if seenSignatures.contains(signature) { continue }
+            seenSignatures.insert(signature)
+
+            results.append(
+                ManualEntryPrefill.Item(
+                    name: parsed.name,
+                    quantity: parsed.quantity,
+                    price: parsed.price
+                )
+            )
+        }
+
+        return Array(results.prefix(12))
+    }
+
+    private static func rowsForItemParsing(from rows: [OCRRow]) -> [OCRRow] {
+        // Typical receipts list items above subtotal/total and metadata below.
+        let lowercased = rows.map { $0.text.lowercased() }
+        let endIndex = lowercased.firstIndex { line in
+            line.contains("subtotal") || line.hasPrefix("total")
+        } ?? rows.endIndex
+
+        if endIndex > rows.startIndex {
+            return Array(rows[..<endIndex])
+        }
+        return rows
+    }
+
     private static func shouldIgnoreItemLine(lowercasedLine: String) -> Bool {
-        ignoredLineTokens.contains(where: { lowercasedLine.contains($0) })
+        if ignoredLineTokens.contains(where: { lowercasedLine.contains($0) }) {
+            return true
+        }
+
+        let hardNoisePatterns = [
+            #"^st#"#,
+            #"^op#"#,
+            #"^te#"#,
+            #"^tr#"#,
+            #"^ref\s*#"#,
+            #"^trans"#,
+            #"^\*{2,}"#,
+            #"^\d{2}/\d{2}/\d{2,4}"#
+        ]
+
+        for pattern in hardNoisePatterns {
+            if lowercasedLine.range(of: pattern, options: .regularExpression) != nil {
+                return true
+            }
+        }
+
+        return false
     }
 
     private static func extractQuantity(from line: String) -> Int {
@@ -478,8 +757,142 @@ private enum ReceiptOCRParser {
         return 1
     }
 
+    private static func parseRetailItemRow(_ row: OCRRow) -> (name: String, quantity: Int, price: String)? {
+        if let parsed = parseRetailItemUsingSegments(row) {
+            return parsed
+        }
+        if let parsed = parseRetailItemLineWithDecimalPrice(row.text) {
+            return parsed
+        }
+        return parseRetailItemLineWithImpliedCents(row.text)
+    }
+
+    private static func parseRetailItemUsingSegments(_ row: OCRRow) -> (name: String, quantity: Int, price: String)? {
+        guard row.segments.count >= 2 else { return nil }
+
+        let segments = row.segments.sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+        let hasTaxFlag = segments.contains { isSingleTaxFlag($0.text) }
+
+        var chosenPrice: String?
+        var priceIndex: Int?
+
+        for index in segments.indices.reversed() {
+            let token = segments[index].text
+            if let normalized = normalizeAmount(token) {
+                chosenPrice = normalized
+                priceIndex = index
+                break
+            }
+        }
+
+        if chosenPrice == nil, hasTaxFlag {
+            for index in segments.indices.reversed() {
+                let token = segments[index].text.replacingOccurrences(of: ",", with: "")
+                guard token.range(of: #"^\d{3,5}$"#, options: .regularExpression) != nil else { continue }
+                guard let centsValue = Int(token), centsValue >= 50, centsValue <= 50_000 else { continue }
+                let decimalPrice = Decimal(centsValue) / Decimal(100)
+                chosenPrice = NSDecimalNumber(decimal: decimalPrice).stringValue
+                priceIndex = index
+                break
+            }
+        }
+
+        guard let chosenPrice, let priceIndex else { return nil }
+
+        let leftTokens = Array(segments[..<priceIndex]).map(\.text)
+        let rawName = leftTokens
+            .filter { !$0.isEmpty }
+            .filter { $0.range(of: #"^\d{6,14}$"#, options: .regularExpression) == nil } // drop UPC-like tokens
+            .joined(separator: " ")
+
+        let cleanedName = cleanItemName(rawName)
+        guard cleanedName.count >= 2 else { return nil }
+        guard cleanedName.rangeOfCharacter(from: .letters) != nil else { return nil }
+
+        let quantity = extractQuantity(from: row.text)
+        return (cleanedName, quantity, chosenPrice)
+    }
+
+    private static func isSingleTaxFlag(_ token: String) -> Bool {
+        token.range(of: #"^[A-Z]$"#, options: .regularExpression) != nil
+    }
+
+    private static func parseRetailItemLineWithDecimalPrice(_ line: String) -> (name: String, quantity: Int, price: String)? {
+        // Prefer the last decimal amount in the line; receipt rows often include UPC before it.
+        let pattern = #"([0-9]+\.[0-9]{2})\s*[A-Z]?\s*$"#
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+            let priceRange = Range(match.range(at: 1), in: line)
+        else {
+            return nil
+        }
+
+        let rawName = String(line[..<priceRange.lowerBound])
+        let cleanedName = cleanItemName(rawName)
+        guard cleanedName.rangeOfCharacter(from: .letters) != nil else { return nil }
+        guard let normalizedPrice = normalizeAmount(String(line[priceRange])) else { return nil }
+
+        let quantity = extractQuantity(from: line)
+        return (cleanedName, quantity, normalizedPrice)
+    }
+
+    private static func parseRetailItemLineWithImpliedCents(_ line: String) -> (name: String, quantity: Int, price: String)? {
+        // Fallback for OCR that drops decimal points on item lines:
+        // "DOG TREAT 007119013654 292 X" -> 2.92
+        // Restrict by requiring a trailing tax/category flag to avoid address/ID lines.
+        let pattern = #"^\s*(.+?)\s+(?:\d{6,14}\s+)?(\d{3,5})\s+([A-Z])\s*$"#
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+            let nameRange = Range(match.range(at: 1), in: line),
+            let centsRange = Range(match.range(at: 2), in: line),
+            let centsValue = Int(line[centsRange])
+        else {
+            return nil
+        }
+
+        // Basic sanity guard: 0.50 ... 500.00
+        guard centsValue >= 50 && centsValue <= 50_000 else { return nil }
+
+        let rawName = String(line[nameRange])
+        let cleanedName = cleanItemName(rawName)
+        guard cleanedName.rangeOfCharacter(from: .letters) != nil else { return nil }
+
+        let decimalPrice = Decimal(centsValue) / Decimal(100)
+        let normalizedPrice = NSDecimalNumber(decimal: decimalPrice).stringValue
+        let quantity = extractQuantity(from: line)
+        return (cleanedName, quantity, normalizedPrice)
+    }
+
+    private static func parseLooseItemLine(_ line: String) -> (name: String, quantity: Int, price: String)? {
+        guard let price = extractAmount(from: line) ?? extractTrailingAmount(from: line) else { return nil }
+
+        let pricePattern = #"\$?\s*[0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}|\$?\s*[0-9]+\.[0-9]{2}"#
+        let name = line
+            .replacingOccurrences(of: pricePattern, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\b\d{6,14}\b"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\b[A-Z]\b\s*$"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let cleaned = cleanItemName(name)
+        guard cleaned.count >= 2 else { return nil }
+        guard cleaned.rangeOfCharacter(from: .letters) != nil else { return nil }
+
+        return (cleaned, extractQuantity(from: line), price)
+    }
+
+    private static func cleanItemName(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: #"\b\d+\s*[xX]\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\b\d{6,14}\b"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\b[A-Z]\b\s*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func extractAmount(from line: String) -> String? {
-        let pattern = #"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})|[0-9]+(?:\.[0-9]{1,2})?)"#
+        let pattern = #"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}|[0-9]+\.[0-9]{2})"#
         guard
             let regex = try? NSRegularExpression(pattern: pattern),
             let match = regex.matches(
@@ -494,7 +907,7 @@ private enum ReceiptOCRParser {
     }
 
     private static func extractTrailingAmount(from line: String) -> String? {
-        let pattern = #"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})|[0-9]+(?:\.[0-9]{1,2})?)\s*$"#
+        let pattern = #"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}|[0-9]+\.[0-9]{2})\s*$"#
         guard
             let regex = try? NSRegularExpression(pattern: pattern),
             let match = regex.firstMatch(
@@ -512,12 +925,70 @@ private enum ReceiptOCRParser {
         let cleaned = raw
             .replacingOccurrences(of: "$", with: "")
             .replacingOccurrences(of: ",", with: "")
+            .replacingOccurrences(of: "O", with: "0")
+            .replacingOccurrences(of: "o", with: "0")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        guard cleaned.range(of: #"^\d+(?:\.\d{2})$"#, options: .regularExpression) != nil else { return nil }
         guard let decimal = Decimal(string: cleaned) else { return nil }
         return NSDecimalNumber(decimal: decimal).stringValue
     }
 }
+
+#if os(iOS)
+private struct OCRDebugView: View {
+    let payload: OCRDebugPayload
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Parsed Summary") {
+                    LabeledContent("Merchant", value: payload.prefill.merchantName.isEmpty ? "—" : payload.prefill.merchantName)
+                    LabeledContent("Tax", value: payload.prefill.tax.isEmpty ? "—" : payload.prefill.tax)
+                    LabeledContent("Tip", value: payload.prefill.tip.isEmpty ? "—" : payload.prefill.tip)
+                    LabeledContent("Items", value: "\(payload.prefill.items.count)")
+                }
+
+                Section("Parsed Items") {
+                    if payload.prefill.items.isEmpty {
+                        Text("No items parsed")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(payload.prefill.items) { item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.name)
+                                Text("qty \(item.quantity) • \(item.price)")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                Section("Raw OCR Rows") {
+                    ForEach(payload.scan.rows) { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(row.text)
+                                .font(.footnote.monospaced())
+                            Text("y=\(row.yCenter, specifier: "%.3f") • segments \(row.segments.count)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .navigationTitle("OCR Debug")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+#endif
 
 private struct SmallActionCard: View {
     let title: String
