@@ -4,6 +4,8 @@ import FirebaseFirestore
 import UIKit
 import PhotosUI
 import Vision
+import CoreImage
+import CoreImage.CIFilterBuiltins
 #elseif os(macOS)
 import AppKit
 #endif
@@ -276,8 +278,12 @@ private struct HomeView: View {
 
 #if os(iOS)
 private enum ReceiptOCRService {
+    private static let ciContext = CIContext()
+
     static func extractText(from cgImage: CGImage) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
+        let imageForOCR = preprocessForOCR(cgImage) ?? cgImage
+
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
             let request = VNRecognizeTextRequest { request, error in
                 if let error {
                     continuation.resume(throwing: error)
@@ -299,7 +305,7 @@ private enum ReceiptOCRService {
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
 
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            let handler = VNImageRequestHandler(cgImage: imageForOCR, options: [:])
 
             do {
                 try handler.perform([request])
@@ -307,6 +313,26 @@ private enum ReceiptOCRService {
                 continuation.resume(throwing: error)
             }
         }
+    }
+
+    private static func preprocessForOCR(_ cgImage: CGImage) -> CGImage? {
+        let input = CIImage(cgImage: cgImage)
+
+        let colorControls = CIFilter.colorControls()
+        colorControls.inputImage = input
+        colorControls.saturation = 0
+        colorControls.contrast = 1.45
+        colorControls.brightness = 0.03
+
+        guard let colorAdjusted = colorControls.outputImage else { return nil }
+
+        let sharpen = CIFilter.sharpenLuminance()
+        sharpen.inputImage = colorAdjusted
+        sharpen.sharpness = 0.75
+
+        guard let sharpened = sharpen.outputImage else { return nil }
+
+        return ciContext.createCGImage(sharpened, from: sharpened.extent)
     }
 }
 #endif
@@ -319,7 +345,23 @@ private enum ReceiptOCRParser {
         "tip",
         "gratuity",
         "balance",
-        "amount due"
+        "amount due",
+        "visa",
+        "mastercard",
+        "discover",
+        "amex",
+        "card",
+        "payment",
+        "cash",
+        "change",
+        "auth",
+        "approval",
+        "transaction",
+        "invoice",
+        "order #",
+        "table",
+        "server",
+        "thank you"
     ]
 
     static func prefill(fromRecognizedText text: String) -> ManualEntryPrefill {
@@ -355,7 +397,7 @@ private enum ReceiptOCRParser {
         for line in lines {
             let lower = line.lowercased()
             guard keywords.contains(where: { lower.contains($0) }) else { continue }
-            if let amount = extractAmount(from: line) {
+            if let amount = extractTrailingAmount(from: line) ?? extractAmount(from: line) {
                 return amount
             }
         }
@@ -364,24 +406,40 @@ private enum ReceiptOCRParser {
 
     private static func detectItems(lines: [String]) -> [ManualEntryPrefill.Item] {
         var detected: [ManualEntryPrefill.Item] = []
+        var seenSignatures = Set<String>()
 
         for line in lines {
-            guard let amount = extractTrailingAmount(from: line) else { continue }
             let lower = line.lowercased()
-            if ignoredLineTokens.contains(where: { lower.contains($0) }) { continue }
+            if shouldIgnoreItemLine(lowercasedLine: lower) { continue }
 
-            let namePortion = line.replacingOccurrences(of: amount, with: "")
+            guard let amount = extractTrailingAmount(from: line) else { continue }
+            guard let normalizedAmount = normalizeAmount(amount) else { continue }
+            if normalizedAmount == "0" || normalizedAmount == "0.0" || normalizedAmount == "0.00" { continue }
+
+            let quantity = extractQuantity(from: line)
+
+            let namePortion = line.replacingOccurrences(
+                of: #"\$?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?\s*$"#,
+                with: "",
+                options: .regularExpression
+            )
             let cleanedName = namePortion
-                .replacingOccurrences(of: "$", with: "")
+                .replacingOccurrences(of: #"\b\d+\s*[xX]\s*"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
 
             guard cleanedName.count >= 2 else { continue }
+            guard cleanedName.rangeOfCharacter(from: .letters) != nil else { continue }
+
+            let signature = "\(cleanedName.lowercased())|\(normalizedAmount)"
+            if seenSignatures.contains(signature) { continue }
+            seenSignatures.insert(signature)
 
             detected.append(
                 ManualEntryPrefill.Item(
                     name: cleanedName,
-                    quantity: 1,
-                    price: amount
+                    quantity: quantity,
+                    price: normalizedAmount
                 )
             )
         }
@@ -393,8 +451,35 @@ private enum ReceiptOCRParser {
         return Array(detected.prefix(12))
     }
 
+    private static func shouldIgnoreItemLine(lowercasedLine: String) -> Bool {
+        ignoredLineTokens.contains(where: { lowercasedLine.contains($0) })
+    }
+
+    private static func extractQuantity(from line: String) -> Int {
+        let patterns = [
+            #"^\s*(\d+)\s*[xX]\s+"#,
+            #"\bqty[:\s]*(\d+)\b"#
+        ]
+
+        for pattern in patterns {
+            guard
+                let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                match.numberOfRanges > 1,
+                let range = Range(match.range(at: 1), in: line),
+                let qty = Int(line[range]),
+                qty > 0
+            else {
+                continue
+            }
+            return min(qty, 99)
+        }
+
+        return 1
+    }
+
     private static func extractAmount(from line: String) -> String? {
-        let pattern = #"([0-9]+(?:\.[0-9]{1,2})?)"#
+        let pattern = #"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})|[0-9]+(?:\.[0-9]{1,2})?)"#
         guard
             let regex = try? NSRegularExpression(pattern: pattern),
             let match = regex.matches(
@@ -405,11 +490,11 @@ private enum ReceiptOCRParser {
         else {
             return nil
         }
-        return String(line[amountRange])
+        return normalizeAmount(String(line[amountRange]))
     }
 
     private static func extractTrailingAmount(from line: String) -> String? {
-        let pattern = #"([0-9]+(?:\.[0-9]{1,2})?)\s*$"#
+        let pattern = #"\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})|[0-9]+(?:\.[0-9]{1,2})?)\s*$"#
         guard
             let regex = try? NSRegularExpression(pattern: pattern),
             let match = regex.firstMatch(
@@ -420,7 +505,17 @@ private enum ReceiptOCRParser {
         else {
             return nil
         }
-        return String(line[amountRange])
+        return normalizeAmount(String(line[amountRange]))
+    }
+
+    private static func normalizeAmount(_ raw: String) -> String? {
+        let cleaned = raw
+            .replacingOccurrences(of: "$", with: "")
+            .replacingOccurrences(of: ",", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let decimal = Decimal(string: cleaned) else { return nil }
+        return NSDecimalNumber(decimal: decimal).stringValue
     }
 }
 
