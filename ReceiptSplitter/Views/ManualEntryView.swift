@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ManualEntryView: View {
     let onReceiptSaved: (Receipt) -> Void
+    let friendSuggestions: [String]
 
     @State private var merchantName: String
     @State private var participantNames = "You"
@@ -13,8 +14,13 @@ struct ManualEntryView: View {
     @State private var submitErrorMessage: String?
     @State private var isSubmitting = false
 
-    init(prefill: ManualEntryPrefill? = nil, onReceiptSaved: @escaping (Receipt) -> Void) {
+    init(
+        prefill: ManualEntryPrefill? = nil,
+        friendSuggestions: [String] = [],
+        onReceiptSaved: @escaping (Receipt) -> Void
+    ) {
         self.onReceiptSaved = onReceiptSaved
+        self.friendSuggestions = friendSuggestions
         _merchantName = State(initialValue: prefill?.merchantName ?? "")
         _tax = State(initialValue: prefill?.tax ?? "")
         _tip = State(initialValue: prefill?.tip ?? "")
@@ -36,6 +42,27 @@ struct ManualEntryView: View {
             Section("Receipt Details") {
                 TextField("Merchant Name", text: $merchantName)
                 TextField("Participants (comma separated)", text: $participantNames)
+                if !friendSuggestions.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(friendSuggestions, id: \.self) { friendName in
+                                let isSelected = parsedParticipants.contains(friendName)
+                                Button {
+                                    addParticipantIfNeeded(friendName)
+                                } label: {
+                                    Label(friendName, systemImage: isSelected ? "checkmark.circle.fill" : "plus.circle")
+                                        .font(.caption.weight(.semibold))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(isSelected ? Color.green.opacity(0.18) : Color.blue.opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
                 TextField("Tax", text: $tax)
                 TextField("Tip", text: $tip)
 
@@ -57,6 +84,7 @@ struct ManualEntryView: View {
                         .foregroundStyle(.red)
                 }
             }
+            .textCase(nil)
 
             Section("Items") {
                 ForEach($itemDrafts) { $draft in
@@ -105,15 +133,24 @@ struct ManualEntryView: View {
                         .foregroundStyle(.red)
                 }
             }
+            .textCase(nil)
 
             Section("Actions") {
                 Button("Calculate Split") {
                     submitManualSplit()
                 }
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 8)
                 .disabled(!canSubmit || isSubmitting)
             }
+            .textCase(nil)
         }
         .navigationTitle("Manual Entry")
+#if os(iOS)
+        .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
+#endif
         .navigationDestination(item: $splitResult) { result in
             SplitResultsView(result: result) { savedReceipt in
                 onReceiptSaved(savedReceipt)
@@ -130,7 +167,11 @@ struct ManualEntryView: View {
         if values.isEmpty { return ["You"] }
 
         var unique: [String] = []
-        for name in values where !unique.contains(name) {
+        var seenLowercased: Set<String> = []
+        for name in values {
+            let lowered = name.lowercased()
+            guard !seenLowercased.contains(lowered) else { continue }
+            seenLowercased.insert(lowered)
             unique.append(name)
         }
         return unique
@@ -180,6 +221,18 @@ struct ManualEntryView: View {
             var draft = ManualEntryItemDraft()
             draft.assignedParticipantNames = Set(defaultParticipantAssignment)
             itemDrafts = [draft]
+        }
+    }
+
+    private func addParticipantIfNeeded(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !parsedParticipants.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) else { return }
+        let existing = participantNames.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existing.isEmpty {
+            participantNames = trimmed
+        } else {
+            participantNames = "\(existing), \(trimmed)"
         }
     }
 
@@ -271,10 +324,17 @@ private struct SplitResultsView: View {
                     onSave(result.receipt)
                     didSave = true
                 }
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 8)
                 .disabled(didSave)
             }
         }
         .navigationTitle("Split Result")
+#if os(iOS)
+        .scrollContentBackground(.hidden)
+        .background(Color(UIColor.systemGroupedBackground))
+#endif
     }
 
     private func currencyString(_ amount: Decimal) -> String {
