@@ -6,7 +6,7 @@ const { DocumentProcessorServiceClient } = require("@google-cloud/documentai");
 admin.initializeApp();
 
 const documentAIClient = new DocumentProcessorServiceClient();
-const PARSER_VERSION = "docai-v6-2026-03-05";
+const PARSER_VERSION = "docai-v7-2026-03-06";
 
 exports.processOCRJob = functions.firestore
   .document("users/{userId}/ocrJobs/{jobId}")
@@ -350,6 +350,7 @@ function parseItemsFromLines(lines) {
 
     // Case B: name line with nearby price line.
     let foundPrice = "";
+    let foundPriceLine = "";
     let consumedUntil = i;
     for (let j = i + 1; j <= Math.min(i + 3, window.length - 1); j += 1) {
       const candidate = String(window[j] || "").trim();
@@ -357,6 +358,7 @@ function parseItemsFromLines(lines) {
       const priceFromCandidate = extractPriceFromLine(candidate);
       if (priceFromCandidate) {
         foundPrice = priceFromCandidate;
+        foundPriceLine = candidate;
         consumedUntil = j;
         break;
       }
@@ -367,6 +369,7 @@ function parseItemsFromLines(lines) {
     const cleanedName = cleanItemName(line);
     if (!cleanedName || !looksLikeItemName(cleanedName)) continue;
     const quantity = extractQuantityFromLine(line);
+    if (shouldRejectPairedItemCandidate(cleanedName, foundPrice, foundPriceLine)) continue;
 
     const sig = `${cleanedName.toLowerCase()}|${foundPrice}`;
     const existing = bySig.get(sig);
@@ -398,6 +401,28 @@ function parseItemsFromLines(lines) {
   }
 
   return Array.from(bySig.values());
+}
+
+function shouldRejectPairedItemCandidate(name, price, priceLine) {
+  const amount = Number(price || 0);
+  const rawPriceLine = String(priceLine || "").trim();
+  const upperName = String(name || "").toUpperCase();
+
+  // Target-style hardgoods lines can appear as:
+  //   BISSELL
+  //   I $129.99
+  // Keep these out of grocery split defaults.
+  if (/^[TI]\s*\$?[0-9]+\.[0-9]{2}\s*$/.test(rawPriceLine) && amount >= 25) {
+    return true;
+  }
+
+  // One-token all-caps name with unusually high price from paired lines
+  // is likely a bad pairing in receipt OCR fallback.
+  if (/^[A-Z0-9-]{5,}$/.test(upperName) && amount >= 80) {
+    return true;
+  }
+
+  return false;
 }
 
 function parseItemsInline(lines) {
