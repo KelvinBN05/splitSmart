@@ -1176,6 +1176,9 @@ private struct HistoryView: View {
     @State private var creatingSessionReceiptID: UUID?
     @State private var sessionStatusMessage: String?
     @State private var sessionErrorMessage: String?
+    @State private var joinCode: String = ""
+    @State private var isJoinSheetPresented = false
+    @State private var activeSessionRoute: SplitSessionRoute?
 
     var body: some View {
         Group {
@@ -1217,6 +1220,54 @@ private struct HistoryView: View {
             }
         }
         .navigationTitle("History")
+        .toolbar {
+#if os(iOS)
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    isJoinSheetPresented = true
+                } label: {
+                    Label("Join Session", systemImage: "link.badge.plus")
+                }
+            }
+#else
+            ToolbarItem {
+                Button {
+                    isJoinSheetPresented = true
+                } label: {
+                    Label("Join Session", systemImage: "link.badge.plus")
+                }
+            }
+#endif
+        }
+        .sheet(isPresented: $isJoinSheetPresented) {
+            NavigationStack {
+                Form {
+                    Section("Join by Invite Code") {
+                        TextField("Invite Code", text: $joinCode)
+#if os(iOS)
+                            .textInputAutocapitalization(.characters)
+#endif
+                        Button("Join Session") {
+                            Task { await joinSession() }
+                        }
+                        .disabled(joinCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creatingSessionReceiptID != nil)
+                    }
+                }
+                .navigationTitle("Join Session")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { isJoinSheetPresented = false }
+                    }
+                }
+            }
+        }
+        .navigationDestination(item: $activeSessionRoute) { route in
+            SplitSessionDetailView(
+                sessionID: route.id,
+                currentUserID: currentUserID,
+                currentUserEmail: currentUserEmail
+            )
+        }
         .alert("Split Session", isPresented: Binding(
             get: { sessionStatusMessage != nil },
             set: { if !$0 { sessionStatusMessage = nil } }
@@ -1246,9 +1297,226 @@ private struct HistoryView: View {
                 ownerUserId: currentUserID,
                 ownerDisplayName: currentUserEmail
             )
-            sessionStatusMessage = "Session created: \(createdSession.id)"
+            activeSessionRoute = SplitSessionRoute(id: createdSession.id)
         } catch {
             sessionErrorMessage = "Failed to create session. \(error.localizedDescription)"
+        }
+    }
+
+    private func joinSession() async {
+        guard creatingSessionReceiptID == nil else { return }
+        creatingSessionReceiptID = UUID()
+        defer { creatingSessionReceiptID = nil }
+
+        do {
+            let session = try await splitSessionRepository.joinSession(
+                inviteCode: joinCode,
+                userId: currentUserID,
+                userDisplayName: currentUserEmail
+            )
+            joinCode = ""
+            isJoinSheetPresented = false
+            activeSessionRoute = SplitSessionRoute(id: session.id)
+        } catch {
+            sessionErrorMessage = "Join failed. \(error.localizedDescription)"
+        }
+    }
+}
+
+private struct SplitSessionRoute: Identifiable, Hashable {
+    let id: String
+}
+
+private struct SplitSessionDetailView: View {
+    let sessionID: String
+    let currentUserID: String
+    let currentUserEmail: String
+
+    private let repository = FirestoreSplitSessionRepository()
+    @State private var session: SplitSession?
+    @State private var listener: ListenerRegistration?
+    @State private var inviteCodeError: String?
+    @State private var inviteCodeStatus: String?
+    @State private var actionError: String?
+
+    var body: some View {
+        List {
+            if let session {
+                Section("Session") {
+                    LabeledContent("Session ID", value: session.id)
+                    LabeledContent("Merchant", value: session.merchantName)
+                    LabeledContent("Status", value: session.status)
+                    if let code = session.inviteCode {
+                        LabeledContent("Invite Code", value: code)
+                    }
+                }
+
+                Section("Members") {
+                    ForEach(session.members) { member in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(member.displayName)
+                                Text(member.role)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if session.readyUserIds.contains(member.id) {
+                                Text("Ready")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.green)
+                            } else {
+                                Text(member.status)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                Section("Items") {
+                    ForEach(session.items) { item in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(item.name)
+                                Spacer()
+                                Text("x\(item.quantity) • \(Formatters.currencyString(from: item.unitPrice))")
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(session.members) { member in
+                                        Button {
+                                            Task { await toggleAssignment(item: item, memberID: member.id) }
+                                        } label: {
+                                            Text(member.displayName)
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 6)
+                                                .background(item.assignedUserIds.contains(member.id) ? Color.blue.opacity(0.2) : Color.gray.opacity(0.15))
+                                                .clipShape(Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                Section("Live Totals") {
+                    ForEach(SplitSessionCalculator.memberTotals(for: session), id: \.userId) { total in
+                        let displayName = session.members.first(where: { $0.id == total.userId })?.displayName ?? total.userId
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(displayName)
+                                .font(.headline)
+                            Text("Items: \(Formatters.currencyString(from: total.itemTotal))")
+                            Text("Tax: \(Formatters.currencyString(from: total.taxShare))")
+                            Text("Tip: \(Formatters.currencyString(from: total.tipShare))")
+                            Text("Total: \(Formatters.currencyString(from: total.grandTotal))")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                }
+
+                Section("Actions") {
+                    Button("Set Ready") {
+                        Task { await setReady(true) }
+                    }
+                    .disabled(session.readyUserIds.contains(currentUserID))
+
+                    Button("Set Not Ready") {
+                        Task { await setReady(false) }
+                    }
+                    .disabled(!session.readyUserIds.contains(currentUserID))
+
+                    if session.ownerUserId == currentUserID {
+                        Button("Generate Invite Code") {
+                            Task { await generateInviteCode(sessionID: session.id) }
+                        }
+
+                        Button("Finalize Session") {
+                            Task { await finalize(sessionID: session.id) }
+                        }
+                        .disabled(!SplitSessionAccess.canFinalize(session, userId: currentUserID))
+                    }
+                }
+            } else {
+                Section {
+                    ProgressView("Loading session...")
+                }
+            }
+        }
+        .navigationTitle("Split Session")
+        .task {
+            startListening()
+        }
+        .onDisappear {
+            listener?.remove()
+            listener = nil
+        }
+        .alert("Invite", isPresented: Binding(get: { inviteCodeStatus != nil }, set: { if !$0 { inviteCodeStatus = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(inviteCodeStatus ?? "")
+        }
+        .alert("Error", isPresented: Binding(get: { actionError != nil || inviteCodeError != nil }, set: { if !$0 { actionError = nil; inviteCodeError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(actionError ?? inviteCodeError ?? "Unknown error")
+        }
+    }
+
+    private func startListening() {
+        guard listener == nil else { return }
+        listener = repository.observeSession(sessionID: sessionID) { updated in
+            self.session = updated
+        }
+    }
+
+    private func generateInviteCode(sessionID: String) async {
+        do {
+            let code = try await repository.createInviteCode(sessionID: sessionID, ownerUserId: currentUserID)
+            inviteCodeStatus = "Invite code: \(code)"
+        } catch {
+            inviteCodeError = error.localizedDescription
+        }
+    }
+
+    private func toggleAssignment(item: SplitSessionItem, memberID: String) async {
+        guard var session else { return }
+        var assigned = Set(item.assignedUserIds)
+        if assigned.contains(memberID) {
+            assigned.remove(memberID)
+        } else {
+            assigned.insert(memberID)
+        }
+        if assigned.isEmpty {
+            assigned.insert(currentUserID)
+        }
+        do {
+            try await repository.updateAssignments(sessionID: session.id, itemID: item.id, assignedUserIds: Array(assigned))
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func setReady(_ ready: Bool) async {
+        guard let session else { return }
+        do {
+            try await repository.setReadyState(sessionID: session.id, userId: currentUserID, isReady: ready)
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func finalize(sessionID: String) async {
+        do {
+            try await repository.finalizeSession(sessionID: sessionID, ownerUserId: currentUserID)
+        } catch {
+            actionError = error.localizedDescription
         }
     }
 }

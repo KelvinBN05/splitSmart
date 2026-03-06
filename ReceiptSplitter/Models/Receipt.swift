@@ -48,6 +48,9 @@ struct SplitSession: Identifiable, Hashable, Codable {
     var createdAt: Date
     var updatedAt: Date
     var status: String
+    var inviteCode: String?
+    var readyUserIds: [String]
+    var finalizedAt: Date?
     var members: [SplitSessionMember]
     var items: [SplitSessionItem]
     var totals: SplitSessionTotals
@@ -73,6 +76,57 @@ struct SplitSessionTotals: Hashable, Codable {
     var tax: Decimal
     var tip: Decimal
     var total: Decimal
+}
+
+enum SplitSessionAccess {
+    static func canRead(_ session: SplitSession, userId: String) -> Bool {
+        session.ownerUserId == userId || session.members.contains(where: { $0.id == userId })
+    }
+
+    static func canFinalize(_ session: SplitSession, userId: String) -> Bool {
+        guard session.ownerUserId == userId else { return false }
+        return Set(session.readyUserIds) == Set(session.members.map(\.id))
+    }
+}
+
+enum SplitSessionCalculator {
+    struct MemberTotal: Hashable {
+        let userId: String
+        let itemTotal: Decimal
+        let taxShare: Decimal
+        let tipShare: Decimal
+        let grandTotal: Decimal
+    }
+
+    static func memberTotals(for session: SplitSession) -> [MemberTotal] {
+        let memberIDs = session.members.map(\.id)
+        guard !memberIDs.isEmpty else { return [] }
+
+        let itemTotalsByUser: [String: Decimal] = memberIDs.reduce(into: [:]) { partial, userId in
+            partial[userId] = session.items.reduce(Decimal.zero) { subtotal, item in
+                guard item.assignedUserIds.contains(userId), !item.assignedUserIds.isEmpty else { return subtotal }
+                let divisor = Decimal(item.assignedUserIds.count)
+                return subtotal + ((Decimal(item.quantity) * item.unitPrice) / divisor)
+            }
+        }
+
+        let subtotal = itemTotalsByUser.values.reduce(Decimal.zero, +)
+        let safeSubtotal = subtotal == 0 ? Decimal(1) : subtotal
+
+        return memberIDs.map { userId in
+            let itemTotal = itemTotalsByUser[userId] ?? 0
+            let taxShare = (session.totals.tax * itemTotal) / safeSubtotal
+            let tipShare = (session.totals.tip * itemTotal) / safeSubtotal
+            let grand = itemTotal + taxShare + tipShare
+            return MemberTotal(
+                userId: userId,
+                itemTotal: itemTotal,
+                taxShare: taxShare,
+                tipShare: tipShare,
+                grandTotal: grand
+            )
+        }
+    }
 }
 
 private extension Decimal {

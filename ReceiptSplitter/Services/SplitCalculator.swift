@@ -28,7 +28,8 @@ enum SplitCalculator {
             guard !consumers.isEmpty else { continue }
 
             let splitAmount = (item.subtotal / Decimal(consumers.count)).roundedToCents()
-            let ids = Array(consumers)
+            // Deterministic ordering avoids random penny assignment from Set iteration order.
+            let ids = Array(consumers).sorted { $0.uuidString < $1.uuidString }
 
             for index in ids.indices {
                 let participantID = ids[index]
