@@ -1783,14 +1783,23 @@ private struct ReceiptSplitOverviewView: View {
                             Text(Formatters.currencyString(from: item.subtotal))
                                 .foregroundStyle(.secondary)
                         }
-                        Picker("Assigned To", selection: assigneeBinding(for: item.id)) {
-                            ForEach(draft.participants) { participant in
-                                Text(participant.name).tag(participant.id)
+                        Text("Split With")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        ForEach(draft.participants) { participant in
+                            Button {
+                                toggleParticipantAssignment(itemID: item.id, participantID: participant.id)
+                            } label: {
+                                HStack {
+                                    Image(systemName: isAssigned(itemID: item.id, participantID: participant.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(isAssigned(itemID: item.id, participantID: participant.id) ? Color.accentColor : .secondary)
+                                    Text(participant.name)
+                                    Spacer()
+                                }
                             }
+                            .buttonStyle(.plain)
                         }
-#if os(iOS)
-                        .pickerStyle(.menu)
-#endif
                     }
                     .padding(.vertical, 2)
                 }
@@ -1853,19 +1862,19 @@ private struct ReceiptSplitOverviewView: View {
         }
     }
 
-    private func assigneeBinding(for itemID: UUID) -> Binding<UUID> {
-        Binding(
-            get: {
-                guard let item = draft.items.first(where: { $0.id == itemID }) else {
-                    return draft.participants.first?.id ?? UUID()
-                }
-                return item.assignedParticipantIDs.first ?? draft.participants.first?.id ?? UUID()
-            },
-            set: { newValue in
-                guard let idx = draft.items.firstIndex(where: { $0.id == itemID }) else { return }
-                draft.items[idx].assignedParticipantIDs = [newValue]
-            }
-        )
+    private func isAssigned(itemID: UUID, participantID: UUID) -> Bool {
+        guard let item = draft.items.first(where: { $0.id == itemID }) else { return false }
+        return item.assignedParticipantIDs.contains(participantID)
+    }
+
+    private func toggleParticipantAssignment(itemID: UUID, participantID: UUID) {
+        guard let index = draft.items.firstIndex(where: { $0.id == itemID }) else { return }
+        if draft.items[index].assignedParticipantIDs.contains(participantID) {
+            if draft.items[index].assignedParticipantIDs.count == 1 { return }
+            draft.items[index].assignedParticipantIDs.remove(participantID)
+        } else {
+            draft.items[index].assignedParticipantIDs.insert(participantID)
+        }
     }
 
     private func saveAndClose() async {
