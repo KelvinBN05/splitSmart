@@ -1,5 +1,21 @@
 import Foundation
 
+struct ManualEntryPrefill: Identifiable, Hashable {
+    struct Item: Identifiable, Hashable {
+        let id = UUID()
+        var name: String
+        var quantity: Int
+        var price: String
+    }
+
+    let id = UUID()
+    var merchantName: String
+    var tax: String
+    var tip: String
+    var items: [Item]
+    var sourceOCRJobID: String?
+}
+
 struct ManualEntryItemDraft: Identifiable {
     let id = UUID()
     var name: String = ""

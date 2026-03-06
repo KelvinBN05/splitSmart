@@ -67,3 +67,10 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Firebase / Functions
+functions/node_modules/
+functions/.env
+functions/.env.*
+firebase-debug.log
+firepit-log.txt

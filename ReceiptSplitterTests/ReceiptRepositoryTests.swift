@@ -23,7 +23,8 @@ final class ReceiptRepositoryTests: XCTestCase {
                 )
             ],
             tax: Decimal(string: "1.25")!,
-            tip: Decimal(string: "2.00")!
+            tip: Decimal(string: "2.00")!,
+            sourceOCRJobID: "OCR-JOB-123"
         )
 
         let encoded = FirestoreReceiptMapper.encodeReceipt(receipt, ownerUserId: ownerId)
@@ -35,6 +36,7 @@ final class ReceiptRepositoryTests: XCTestCase {
         XCTAssertEqual(decoded?.participants.count, 2)
         XCTAssertEqual(decoded?.items.count, 1)
         XCTAssertEqual(decoded?.total, receipt.total)
+        XCTAssertEqual(decoded?.sourceOCRJobID, "OCR-JOB-123")
     }
 
     func testFirestoreReceiptMapperDecodeFailsForMissingRequiredFields() {

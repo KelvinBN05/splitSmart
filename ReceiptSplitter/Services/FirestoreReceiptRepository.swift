@@ -35,7 +35,7 @@ final class FirestoreReceiptRepository: ReceiptRepository {
 
 enum FirestoreReceiptMapper {
     static func encodeReceipt(_ receipt: Receipt, ownerUserId: String) -> [String: Any] {
-        [
+        var payload: [String: Any] = [
             "ownerUserId": ownerUserId,
             "merchantName": receipt.merchantName,
             "createdAt": Timestamp(date: receipt.createdAt),
@@ -57,6 +57,12 @@ enum FirestoreReceiptMapper {
                 ]
             }
         ]
+
+        if let sourceOCRJobID = receipt.sourceOCRJobID, !sourceOCRJobID.isEmpty {
+            payload["sourceOCRJobID"] = sourceOCRJobID
+        }
+
+        return payload
     }
 
     static func decodeReceipt(documentID: String, data: [String: Any]) -> Receipt? {
@@ -115,7 +121,8 @@ enum FirestoreReceiptMapper {
             participants: participants,
             items: items,
             tax: tax,
-            tip: tip
+            tip: tip,
+            sourceOCRJobID: data["sourceOCRJobID"] as? String
         )
     }
 
