@@ -68,15 +68,14 @@ struct ContentView: View {
                 HistoryView(
                     currentUserID: currentUser.id,
                     currentUserEmail: currentUser.email ?? "unknown@example.com",
-                    currentUserDisplayName: accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName,
                     receipts: receipts,
                     friends: friends,
                     isLoadingReceipts: isLoadingReceipts,
                     onDeleteReceipt: { receipt in
                         await deleteReceipt(receipt)
                     },
-                    onRefreshReceipts: {
-                        await loadReceipts()
+                    onSaveReceipt: { receipt in
+                        await saveReceiptChanges(receipt)
                     }
                 )
             }
@@ -159,6 +158,20 @@ struct ContentView: View {
         } catch {
             receipts = backup
             loadErrorMessage = "Failed to delete receipt. \(readableCloudErrorMessage(from: error))"
+        }
+    }
+
+    private func saveReceiptChanges(_ receipt: Receipt) async {
+        if let index = receipts.firstIndex(where: { $0.id == receipt.id }) {
+            receipts[index] = receipt
+        } else {
+            receipts.insert(receipt, at: 0)
+        }
+
+        do {
+            try await receiptRepository.saveReceipt(receipt, ownerUserId: currentUser.id)
+        } catch {
+            loadErrorMessage = "Failed to save split changes. \(readableCloudErrorMessage(from: error))"
         }
     }
 
@@ -1564,50 +1577,27 @@ private struct ActivityRow: View {
 private struct HistoryView: View {
     let currentUserID: String
     let currentUserEmail: String
-    let currentUserDisplayName: String
     let receipts: [Receipt]
     let friends: [AppFriend]
     let isLoadingReceipts: Bool
     let onDeleteReceipt: (Receipt) async -> Void
-    let onRefreshReceipts: () async -> Void
+    let onSaveReceipt: (Receipt) async -> Void
 
-    private let inviteRepository = FirestoreReceiptInviteRepository()
-    @State private var inviteFriendsReceipt: Receipt?
-    @State private var selectedFriendIDs: Set<String> = []
-    @State private var itemAssigneeByItemID: [UUID: String] = [:]
-    @State private var incomingInvites: [ReceiptInvite] = []
-    @State private var isLoadingInvites = false
-    @State private var mutatingInviteID: String?
-    @State private var isSendingInvites = false
     @State private var deleteCandidate: Receipt?
-    @State private var inviteStatusMessage: String?
-    @State private var inviteErrorMessage: String?
+    @State private var selectedReceipt: Receipt?
 
     var body: some View {
         historyContent
         .background(AppColors.groupedBackground)
         .navigationTitle("History")
-        .sheet(item: $inviteFriendsReceipt) { receipt in
-            inviteFriendsSheet(for: receipt)
-        }
-        .task {
-            await loadIncomingInvites()
-        }
-        .alert("Update", isPresented: Binding(
-            get: { inviteStatusMessage != nil },
-            set: { if !$0 { inviteStatusMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(inviteStatusMessage ?? "")
-        }
-        .alert("Error", isPresented: Binding(
-            get: { inviteErrorMessage != nil },
-            set: { if !$0 { inviteErrorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(inviteErrorMessage ?? "")
+        .navigationDestination(item: $selectedReceipt) { receipt in
+            ReceiptSplitOverviewView(
+                receipt: receipt,
+                currentUserEmail: currentUserEmail,
+                friends: friends
+            ) { updatedReceipt in
+                await onSaveReceipt(updatedReceipt)
+            }
         }
         .alert("Delete Receipt?", isPresented: Binding(
             get: { deleteCandidate != nil },
@@ -1644,7 +1634,6 @@ private struct HistoryView: View {
         } else {
             ScrollView {
                 VStack(spacing: 12) {
-                    incomingInvitesSection
                     ForEach(receipts) { receipt in
                         receiptCard(receipt)
                     }
@@ -1652,31 +1641,6 @@ private struct HistoryView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var incomingInvitesSection: some View {
-        if isLoadingInvites {
-            HStack(spacing: 8) {
-                ProgressView()
-                Text("Loading invites...")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 4)
-        } else if !incomingInvites.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Receipt Invites")
-                    .font(.headline)
-                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
-                ForEach(incomingInvites) { invite in
-                    inviteCard(invite)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.bottom, 4)
         }
     }
 
@@ -1698,18 +1662,13 @@ private struct HistoryView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    selectedFriendIDs = []
-                    itemAssigneeByItemID = receipt.items.reduce(into: [:]) { partial, item in
-                        partial[item.id] = currentUserID
-                    }
-                    inviteFriendsReceipt = receipt
+                    selectedReceipt = receipt
                 } label: {
-                    Label("Add Friends", systemImage: "person.crop.circle.badge.plus")
+                    Label("Split Overview", systemImage: "person.3")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
-                .disabled(isSendingInvites || friends.isEmpty)
+                .buttonStyle(.borderedProminent)
 
                 Button(role: .destructive) {
                     deleteCandidate = receipt
@@ -1721,6 +1680,10 @@ private struct HistoryView: View {
                 .buttonStyle(.bordered)
             }
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedReceipt = receipt
+        }
         .padding(16)
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -1730,274 +1693,188 @@ private struct HistoryView: View {
         )
         .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
+}
 
-    private func inviteFriendsSheet(for receipt: Receipt) -> some View {
-        let selectedFriends = friends.filter { selectedFriendIDs.contains($0.id) }
-        let assignmentChoices = [AssignmentChoice(id: currentUserID, name: "You")] + selectedFriends.map {
-            AssignmentChoice(id: $0.id, name: $0.displayName)
+private struct ReceiptSplitOverviewView: View {
+    let receipt: Receipt
+    let currentUserEmail: String
+    let friends: [AppFriend]
+    let onSave: (Receipt) async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: Receipt
+    @State private var customPersonName: String = ""
+    @State private var isSaving = false
+
+    init(
+        receipt: Receipt,
+        currentUserEmail: String,
+        friends: [AppFriend],
+        onSave: @escaping (Receipt) async -> Void
+    ) {
+        self.receipt = receipt
+        self.currentUserEmail = currentUserEmail
+        self.friends = friends
+        self.onSave = onSave
+
+        var normalized = receipt
+        if normalized.participants.isEmpty {
+            normalized.participants = [Participant(name: "You")]
         }
+        for index in normalized.items.indices {
+            if normalized.items[index].assignedParticipantIDs.isEmpty,
+               let fallback = normalized.participants.first?.id {
+                normalized.items[index].assignedParticipantIDs = [fallback]
+            }
+        }
+        _draft = State(initialValue: normalized)
+    }
 
-        return NavigationStack {
-            Form {
-                Section("Select Friends") {
-                    if friends.isEmpty {
-                        Text("No friends available. Add friends from Profile first.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(friends) { friend in
-                            Button {
-                                toggleFriendSelection(friend.id)
+    var body: some View {
+        Form {
+            Section("Receipt") {
+                LabeledContent("Merchant", value: draft.merchantName)
+                LabeledContent("Date", value: Formatters.numericDate.string(from: draft.createdAt))
+                LabeledContent("Total", value: Formatters.currencyString(from: draft.total))
+            }
+
+            Section("People") {
+                ForEach(draft.participants) { participant in
+                    HStack {
+                        Text(participant.name)
+                        Spacer()
+                        if canRemoveParticipant(participant) {
+                            Button(role: .destructive) {
+                                removeParticipant(participant)
                             } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(friend.displayName)
-                                            .foregroundStyle(.primary)
-                                        Text(friend.email)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    if selectedFriendIDs.contains(friend.id) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
-                                    } else {
-                                        Image(systemName: "circle")
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
+                                Image(systemName: "xmark.circle.fill")
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
 
-                if !selectedFriends.isEmpty {
-                    Section("Pre-calculate Split") {
-                        ForEach(receipt.items) { item in
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text(item.name)
-                                        .font(.subheadline.weight(.semibold))
-                                    Spacer()
-                                    Text(Formatters.currencyString(from: item.subtotal))
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
+                Menu {
+                    ForEach(addableFriends) { friend in
+                        Button(friend.displayName) {
+                            addParticipant(name: friend.displayName)
+                        }
+                    }
+                } label: {
+                    Label("Add Friend", systemImage: "person.badge.plus")
+                }
+                .disabled(addableFriends.isEmpty)
 
-                                Picker("Assigned To", selection: assigneeBinding(for: item.id)) {
-                                    ForEach(assignmentChoices) { choice in
-                                        Text(choice.name).tag(choice.id)
-                                    }
-                                }
+                HStack {
+                    TextField("Add person (non-user)", text: $customPersonName)
+                    Button("Add") {
+                        addParticipant(name: customPersonName)
+                    }
+                    .disabled(customPersonName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            Section("Split Assignments") {
+                ForEach(draft.items) { item in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(item.name)
+                            Spacer()
+                            Text(Formatters.currencyString(from: item.subtotal))
+                                .foregroundStyle(.secondary)
+                        }
+                        Picker("Assigned To", selection: assigneeBinding(for: item.id)) {
+                            ForEach(draft.participants) { participant in
+                                Text(participant.name).tag(participant.id)
+                            }
+                        }
 #if os(iOS)
-                                .pickerStyle(.menu)
+                        .pickerStyle(.menu)
 #endif
-                            }
-                            .padding(.vertical, 2)
-                        }
                     }
+                    .padding(.vertical, 2)
+                }
+            }
 
-                    Section("Split Preview") {
-                        ForEach(previewRows(for: receipt, choices: assignmentChoices), id: \.id) { row in
-                            HStack {
-                                Text(row.name)
-                                Spacer()
-                                Text(Formatters.currencyString(from: row.total))
-                                    .fontWeight(.semibold)
-                            }
-                        }
+            Section("Overview") {
+                ForEach(SplitCalculator.calculate(receipt: draft)) { row in
+                    HStack {
+                        Text(row.participant.name)
+                        Spacer()
+                        Text(Formatters.currencyString(from: row.grandTotal))
+                            .fontWeight(.semibold)
                     }
                 }
             }
-            .navigationTitle("Add Friends")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { inviteFriendsReceipt = nil }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Send Invites") {
-                        let preparedReceipt = makePreparedReceipt(from: receipt, selectedFriends: selectedFriends)
-                        inviteFriendsReceipt = nil
-                        Task { await sendReceiptInvites(from: preparedReceipt, selectedFriends: selectedFriends) }
+
+            Section("Actions") {
+                Button {
+                    Task { await saveAndClose() }
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Save Split")
+                            .frame(maxWidth: .infinity)
                     }
-                    .disabled(isSendingInvites || selectedFriendIDs.isEmpty)
                 }
+                .disabled(isSaving)
+            }
+        }
+        .navigationTitle("Split Overview")
+    }
+
+    private var addableFriends: [AppFriend] {
+        let existing = Set(draft.participants.map { $0.name.lowercased() })
+        return friends.filter { !existing.contains($0.displayName.lowercased()) }
+    }
+
+    private func addParticipant(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !draft.participants.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) else { return }
+        draft.participants.append(Participant(name: trimmed))
+        customPersonName = ""
+    }
+
+    private func canRemoveParticipant(_ participant: Participant) -> Bool {
+        draft.participants.count > 1
+    }
+
+    private func removeParticipant(_ participant: Participant) {
+        guard canRemoveParticipant(participant) else { return }
+        guard let fallback = draft.participants.first(where: { $0.id != participant.id }) else { return }
+        draft.participants.removeAll { $0.id == participant.id }
+        for index in draft.items.indices {
+            if draft.items[index].assignedParticipantIDs.contains(participant.id) {
+                draft.items[index].assignedParticipantIDs = [fallback.id]
             }
         }
     }
 
-    private func assigneeBinding(for itemID: UUID) -> Binding<String> {
+    private func assigneeBinding(for itemID: UUID) -> Binding<UUID> {
         Binding(
-            get: { itemAssigneeByItemID[itemID] ?? currentUserID },
-            set: { itemAssigneeByItemID[itemID] = $0 }
+            get: {
+                guard let item = draft.items.first(where: { $0.id == itemID }) else {
+                    return draft.participants.first?.id ?? UUID()
+                }
+                return item.assignedParticipantIDs.first ?? draft.participants.first?.id ?? UUID()
+            },
+            set: { newValue in
+                guard let idx = draft.items.firstIndex(where: { $0.id == itemID }) else { return }
+                draft.items[idx].assignedParticipantIDs = [newValue]
+            }
         )
     }
 
-    private func makePreparedReceipt(from receipt: Receipt, selectedFriends: [AppFriend]) -> Receipt {
-        var participantIDByKey: [String: UUID] = [:]
-        var participants: [Participant] = []
-
-        let meParticipant = Participant(name: "You")
-        participantIDByKey[currentUserID] = meParticipant.id
-        participants.append(meParticipant)
-
-        for friend in selectedFriends {
-            let participant = Participant(name: friend.displayName)
-            participantIDByKey[friend.id] = participant.id
-            participants.append(participant)
-        }
-
-        let preparedItems: [ReceiptItem] = receipt.items.map { item in
-            let assigneeKey = itemAssigneeByItemID[item.id] ?? currentUserID
-            let assignedParticipantID = participantIDByKey[assigneeKey] ?? meParticipant.id
-            return ReceiptItem(
-                id: item.id,
-                name: item.name,
-                quantity: item.quantity,
-                unitPrice: item.unitPrice,
-                assignedParticipantIDs: [assignedParticipantID]
-            )
-        }
-
-        return Receipt(
-            id: receipt.id,
-            merchantName: receipt.merchantName,
-            createdAt: receipt.createdAt,
-            participants: participants,
-            items: preparedItems,
-            tax: receipt.tax,
-            tip: receipt.tip,
-            sourceOCRJobID: receipt.sourceOCRJobID
-        )
+    private func saveAndClose() async {
+        guard !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
+        await onSave(draft)
+        dismiss()
     }
-
-    private func previewRows(for receipt: Receipt, choices: [AssignmentChoice]) -> [AssignmentPreviewRow] {
-        var totalsByAssignee: [String: Decimal] = [:]
-        for item in receipt.items {
-            let assignee = itemAssigneeByItemID[item.id] ?? currentUserID
-            totalsByAssignee[assignee, default: 0] += item.subtotal
-        }
-
-        return choices.map { choice in
-            AssignmentPreviewRow(id: choice.id, name: choice.name, total: totalsByAssignee[choice.id] ?? 0)
-        }
-    }
-
-    private func inviteCard(_ invite: ReceiptInvite) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(invite.receipt.merchantName)
-                        .font(.headline)
-                    Text("From \(invite.senderDisplayName)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(Formatters.currencyString(from: invite.receipt.total))
-                    .font(.headline.weight(.semibold))
-            }
-            HStack(spacing: 10) {
-                Button("Accept") {
-                    Task { await acceptInvite(invite.id) }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(mutatingInviteID != nil)
-
-                Button("Decline", role: .destructive) {
-                    Task { await declineInvite(invite.id) }
-                }
-                .buttonStyle(.bordered)
-                .disabled(mutatingInviteID != nil)
-            }
-        }
-        .padding(14)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
-    }
-
-    private func loadIncomingInvites() async {
-        guard !isLoadingInvites else { return }
-        isLoadingInvites = true
-        defer { isLoadingInvites = false }
-        do {
-            incomingInvites = try await inviteRepository.fetchIncomingInvites(userId: currentUserID)
-        } catch {
-            inviteErrorMessage = "Failed to load receipt invites. \(error.localizedDescription)"
-        }
-    }
-
-    private func sendReceiptInvites(from receipt: Receipt, selectedFriends: [AppFriend]) async {
-        guard !selectedFriends.isEmpty else { return }
-        guard !isSendingInvites else { return }
-        isSendingInvites = true
-        defer { isSendingInvites = false }
-        do {
-            try await inviteRepository.sendInvites(
-                receipt: receipt,
-                ownerUserId: currentUserID,
-                ownerDisplayName: currentUserDisplayName,
-                ownerEmail: currentUserEmail,
-                recipients: selectedFriends
-            )
-            inviteStatusMessage = "Invite sent to \(selectedFriends.count) friend\(selectedFriends.count == 1 ? "" : "s")."
-        } catch {
-            inviteErrorMessage = "Failed to send invite. \(error.localizedDescription)"
-        }
-    }
-
-    private func acceptInvite(_ inviteID: String) async {
-        guard mutatingInviteID == nil else { return }
-        mutatingInviteID = inviteID
-        defer { mutatingInviteID = nil }
-        do {
-            try await inviteRepository.acceptInvite(inviteID: inviteID, currentUserId: currentUserID)
-            await loadIncomingInvites()
-            await onRefreshReceipts()
-            inviteStatusMessage = "Receipt invite accepted."
-        } catch {
-            inviteErrorMessage = "Failed to accept invite. \(error.localizedDescription)"
-        }
-    }
-
-    private func declineInvite(_ inviteID: String) async {
-        guard mutatingInviteID == nil else { return }
-        mutatingInviteID = inviteID
-        defer { mutatingInviteID = nil }
-        do {
-            try await inviteRepository.declineInvite(inviteID: inviteID, currentUserId: currentUserID)
-            await loadIncomingInvites()
-            inviteStatusMessage = "Receipt invite declined."
-        } catch {
-            inviteErrorMessage = "Failed to decline invite. \(error.localizedDescription)"
-        }
-    }
-
-    private func toggleFriendSelection(_ userID: String) {
-        if selectedFriendIDs.contains(userID) {
-            selectedFriendIDs.remove(userID)
-            for (itemID, assignee) in itemAssigneeByItemID where assignee == userID {
-                itemAssigneeByItemID[itemID] = currentUserID
-            }
-        } else {
-            selectedFriendIDs.insert(userID)
-        }
-    }
-}
-
-private struct AssignmentChoice: Identifiable {
-    let id: String
-    let name: String
-}
-
-private struct AssignmentPreviewRow: Identifiable {
-    let id: String
-    let name: String
-    let total: Decimal
 }
 
 private struct SplitSessionDetailView: View {
