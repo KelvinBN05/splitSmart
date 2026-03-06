@@ -6,7 +6,7 @@ const { DocumentProcessorServiceClient } = require("@google-cloud/documentai");
 admin.initializeApp();
 
 const documentAIClient = new DocumentProcessorServiceClient();
-const PARSER_VERSION = "docai-v7-2026-03-06";
+const PARSER_VERSION = "docai-v8-2026-03-06";
 
 exports.processOCRJob = functions.firestore
   .document("users/{userId}/ocrJobs/{jobId}")
@@ -369,7 +369,8 @@ function parseItemsFromLines(lines) {
     const cleanedName = cleanItemName(line);
     if (!cleanedName || !looksLikeItemName(cleanedName)) continue;
     const quantity = extractQuantityFromLine(line);
-    if (shouldRejectPairedItemCandidate(cleanedName, foundPrice, foundPriceLine)) continue;
+    const hasNearbySku = hasNearbySkuLine(window, i);
+    if (shouldRejectPairedItemCandidate(cleanedName, foundPrice, foundPriceLine, hasNearbySku)) continue;
 
     const sig = `${cleanedName.toLowerCase()}|${foundPrice}`;
     const existing = bySig.get(sig);
@@ -403,22 +404,25 @@ function parseItemsFromLines(lines) {
   return Array.from(bySig.values());
 }
 
-function shouldRejectPairedItemCandidate(name, price, priceLine) {
+function hasNearbySkuLine(lines, nameLineIndex) {
+  const prev1 = String(lines[nameLineIndex - 1] || "").trim();
+  const prev2 = String(lines[nameLineIndex - 2] || "").trim();
+  return /^\d{6,14}$/.test(prev1) || /^\d{6,14}$/.test(prev2);
+}
+
+function shouldRejectPairedItemCandidate(name, price, priceLine, hasNearbySku) {
   const amount = Number(price || 0);
   const rawPriceLine = String(priceLine || "").trim();
   const upperName = String(name || "").toUpperCase();
 
-  // Target-style hardgoods lines can appear as:
-  //   BISSELL
-  //   I $129.99
-  // Keep these out of grocery split defaults.
-  if (/^[TI]\s*\$?[0-9]+\.[0-9]{2}\s*$/.test(rawPriceLine) && amount >= 25) {
+  // Suspicious pairing: marker-only price line (e.g. "I $129.99") with no nearby SKU context.
+  if (/^[TI]\s*\$?[0-9]+\.[0-9]{2}\s*$/.test(rawPriceLine) && amount >= 25 && !hasNearbySku) {
     return true;
   }
 
   // One-token all-caps name with unusually high price from paired lines
-  // is likely a bad pairing in receipt OCR fallback.
-  if (/^[A-Z0-9-]{5,}$/.test(upperName) && amount >= 80) {
+  // and no SKU context is likely a bad pairing in OCR fallback.
+  if (/^[A-Z0-9-]{5,}$/.test(upperName) && amount >= 80 && !hasNearbySku) {
     return true;
   }
 

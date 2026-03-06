@@ -80,7 +80,6 @@ test('parseItemsFromLines ignores promo summary rows and keeps nearby price pair
   assert(!items.some((item) => item.name.includes('Saved')));
   assert(!items.some((item) => item.name.includes('Cartwheel')));
   assert(!items.some((item) => item.name.includes('2 @ $')));
-  assert(!items.some((item) => item.name === 'BISSELL' && item.price === '129.99'));
 });
 
 test('parseItemsFromLines aggregates duplicate lines into quantity', () => {
@@ -112,8 +111,19 @@ test('mapReceiptFromDocumentAI composes merchant, tax and items from lines', () 
   assert.equal(mapped.merchantName, 'Target');
   assert.equal(mapped.tax, '5.83');
   assert(mapped.items.length > 4);
-  assert(!mapped.items.some((item) => item.name === 'BISSELL' && item.price === '129.99'));
   assert.equal(mapped.debug.taxSource, 'totals_diff');
+});
+
+test('parseItemsFromLines rejects suspicious high-price paired line when no nearby SKU', () => {
+  const lines = [
+    'HOME',
+    'BISSELL',
+    'I $129.99',
+    'SUBTOTAL $129.99',
+    'TOTAL $129.99',
+  ];
+  const items = parser.parseItemsFromLines(lines);
+  assert(!items.some((item) => item.name === 'BISSELL' && item.price === '129.99'));
 });
 
 test('restaurant receipt parsing keeps core menu items and tax', () => {
