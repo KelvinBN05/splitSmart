@@ -1951,6 +1951,8 @@ private struct AccountTabView: View {
     @State private var friendStatusMessage: String?
     @State private var isMutatingFriends = false
     @State private var isLoadingFriends = false
+    @State private var incomingRequests: [FriendRequest] = []
+    @State private var outgoingRequests: [FriendRequest] = []
 
     var body: some View {
         ScrollView {
@@ -2019,9 +2021,9 @@ private struct AccountTabView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 Button {
-                    Task { await addFriend() }
+                    Task { await sendFriendRequest() }
                 } label: {
-                    Text(isMutatingFriends ? "Adding..." : "Add")
+                    Text(isMutatingFriends ? "Sending..." : "Send")
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
@@ -2043,12 +2045,79 @@ private struct AccountTabView: View {
                     .foregroundStyle(.green)
             }
 
+            if !incomingRequests.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Incoming Requests")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+
+                    ForEach(incomingRequests) { request in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(request.senderDisplayName)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(request.senderEmail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Approve") {
+                                Task { await approveRequest(request.id) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(isMutatingFriends)
+
+                            Button("Decline") {
+                                Task { await declineRequest(request.id) }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(isMutatingFriends)
+                        }
+                    }
+                }
+            }
+
+            if !outgoingRequests.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Pending Sent")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+
+                    ForEach(outgoingRequests) { request in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(request.recipientDisplayName)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(request.recipientEmail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("Pending")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                            Button("Cancel") {
+                                Task { await cancelOutgoingRequest(request.id) }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(isMutatingFriends)
+                        }
+                    }
+                }
+            }
+
             if friends.isEmpty {
                 Text("No friends added yet.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                VStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Friends")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
                     ForEach(friends) { friend in
                         HStack(spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
@@ -2060,14 +2129,8 @@ private struct AccountTabView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button(role: .destructive) {
-                                Task { await removeFriend(friend) }
-                            } label: {
-                                Image(systemName: "person.fill.xmark")
-                                    .foregroundStyle(.red)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isMutatingFriends)
+                            Image(systemName: "checkmark.seal.fill")
+                                .foregroundStyle(.green)
                         }
                         .padding(.vertical, 6)
                         .padding(.horizontal, 4)
@@ -2090,13 +2153,19 @@ private struct AccountTabView: View {
         isLoadingFriends = true
         defer { isLoadingFriends = false }
         do {
-            friends = try await userProfileRepository.fetchFriends(userID: currentUserID)
+            async let fetchedFriends = userProfileRepository.fetchFriends(userID: currentUserID)
+            async let fetchedIncoming = userProfileRepository.fetchIncomingFriendRequests(userID: currentUserID)
+            async let fetchedOutgoing = userProfileRepository.fetchOutgoingFriendRequests(userID: currentUserID)
+
+            friends = try await fetchedFriends
+            incomingRequests = try await fetchedIncoming
+            outgoingRequests = try await fetchedOutgoing
         } catch {
             friendErrorMessage = "Could not load friends."
         }
     }
 
-    private func addFriend() async {
+    private func sendFriendRequest() async {
         guard !isMutatingFriends else { return }
         isMutatingFriends = true
         defer { isMutatingFriends = false }
@@ -2104,22 +2173,19 @@ private struct AccountTabView: View {
         friendStatusMessage = nil
 
         do {
-            let created = try await userProfileRepository.addFriend(
+            try await userProfileRepository.sendFriendRequest(
                 currentUserID: currentUserID,
                 friendEmail: friendEmailInput
             )
             friendEmailInput = ""
-            if !friends.contains(where: { $0.id == created.id }) {
-                friends.append(created)
-                friends.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-            }
-            friendStatusMessage = "Friend added."
+            await reloadFriends()
+            friendStatusMessage = "Friend request sent."
         } catch {
             friendErrorMessage = error.localizedDescription
         }
     }
 
-    private func removeFriend(_ friend: AppFriend) async {
+    private func approveRequest(_ requestID: String) async {
         guard !isMutatingFriends else { return }
         isMutatingFriends = true
         defer { isMutatingFriends = false }
@@ -2127,11 +2193,43 @@ private struct AccountTabView: View {
         friendStatusMessage = nil
 
         do {
-            try await userProfileRepository.removeFriend(currentUserID: currentUserID, friendUserID: friend.id)
-            friends.removeAll { $0.id == friend.id }
-            friendStatusMessage = "Friend removed."
+            try await userProfileRepository.acceptFriendRequest(currentUserID: currentUserID, requestID: requestID)
+            await reloadFriends()
+            friendStatusMessage = "Friend request approved."
         } catch {
-            friendErrorMessage = "Failed to remove friend."
+            friendErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func declineRequest(_ requestID: String) async {
+        guard !isMutatingFriends else { return }
+        isMutatingFriends = true
+        defer { isMutatingFriends = false }
+        friendErrorMessage = nil
+        friendStatusMessage = nil
+
+        do {
+            try await userProfileRepository.declineFriendRequest(currentUserID: currentUserID, requestID: requestID)
+            await reloadFriends()
+            friendStatusMessage = "Friend request declined."
+        } catch {
+            friendErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func cancelOutgoingRequest(_ requestID: String) async {
+        guard !isMutatingFriends else { return }
+        isMutatingFriends = true
+        defer { isMutatingFriends = false }
+        friendErrorMessage = nil
+        friendStatusMessage = nil
+
+        do {
+            try await userProfileRepository.cancelOutgoingFriendRequest(currentUserID: currentUserID, requestID: requestID)
+            await reloadFriends()
+            friendStatusMessage = "Request canceled."
+        } catch {
+            friendErrorMessage = error.localizedDescription
         }
     }
 }
