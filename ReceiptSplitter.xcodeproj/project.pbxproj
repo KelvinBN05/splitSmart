@@ -23,6 +23,8 @@
 		44DE88CD2F4BDE7200400553 /* Receipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88CC2F4BDE7200400553 /* Receipt.swift */; };
 		44DE88CF2F4BDE8A00400553 /* SplitCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88CE2F4BDE8A00400553 /* SplitCalculator.swift */; };
 		44DE88D12F4BDEA500400553 /* SplitCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D02F4BDEA500400553 /* SplitCalculatorTests.swift */; };
+		44F7C1012F5B110000A10001 /* ReceiptRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44F7C1002F5B110000A10001 /* ReceiptRepositoryTests.swift */; };
+		44F7C1032F5B110000A10001 /* SplitSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44F7C1022F5B110000A10001 /* SplitSessionTests.swift */; };
 		44DE88D32F4BDEA500400553 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D22F4BDEA500400553 /* ContentView.swift */; };
 		44DE88D52F4BDEA500400553 /* ManualEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D42F4BDEA500400553 /* ManualEntryView.swift */; };
 		44DE88D72F4BDEA500400553 /* ManualEntryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88D62F4BDEA500400553 /* ManualEntryModels.swift */; };
@@ -78,6 +80,8 @@
 		44DE88CC2F4BDE7200400553 /* Receipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Receipt.swift; sourceTree = "<group>"; };
 		44DE88CE2F4BDE8A00400553 /* SplitCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitCalculator.swift; sourceTree = "<group>"; };
 		44DE88D02F4BDEA500400553 /* SplitCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitCalculatorTests.swift; sourceTree = "<group>"; };
+		44F7C1002F5B110000A10001 /* ReceiptRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptRepositoryTests.swift; sourceTree = "<group>"; };
+		44F7C1022F5B110000A10001 /* SplitSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplitSessionTests.swift; sourceTree = "<group>"; };
 		44DE88D22F4BDEA500400553 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		44DE88D42F4BDEA500400553 /* ManualEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryView.swift; sourceTree = "<group>"; };
 		44DE88D62F4BDEA500400553 /* ManualEntryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryModels.swift; sourceTree = "<group>"; };
@@ -173,6 +177,8 @@
 			isa = PBXGroup;
 			children = (
 				44189E2C2F4BDBEA00FDBEC4 /* ReceiptSplitterTests.swift */,
+				44F7C1002F5B110000A10001 /* ReceiptRepositoryTests.swift */,
+				44F7C1022F5B110000A10001 /* SplitSessionTests.swift */,
 				44DE88D02F4BDEA500400553 /* SplitCalculatorTests.swift */,
 			);
 			path = ReceiptSplitterTests;
@@ -410,6 +416,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				44F7C1032F5B110000A10001 /* SplitSessionTests.swift in Sources */,
+				44F7C1012F5B110000A10001 /* ReceiptRepositoryTests.swift in Sources */,
 				44DE88D12F4BDEA500400553 /* SplitCalculatorTests.swift in Sources */,
 				44189E2D2F4BDBEA00FDBEC4 /* ReceiptSplitterTests.swift in Sources */,
 			);

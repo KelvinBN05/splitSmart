@@ -16,22 +16,7 @@ struct AuthGateView: View {
         case .signedOut:
             AuthView()
         case .signedIn(let user):
-            VStack(spacing: 0) {
-                HStack {
-                    Text(user.email ?? "SplitSmart")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Sign Out") {
-                        sessionStore.signOut()
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(.thinMaterial)
-
-                ContentView(currentUser: user)
-            }
+            ContentView(currentUser: user)
         }
     }
 }

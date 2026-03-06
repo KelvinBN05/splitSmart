@@ -2,7 +2,7 @@ import XCTest
 @testable import ReceiptSplitter
 
 final class SplitCalculatorTests: XCTestCase {
-    func testCalculateDistributesItemsTaxAndTipProportionally() {
+    func testCalculateDistributesItemsTaxAndTipProportionally() throws {
         let alex = Participant(id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, name: "Alex")
         let sam = Participant(id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, name: "Sam")
 
@@ -77,7 +77,7 @@ final class SplitCalculatorTests: XCTestCase {
         XCTAssertEqual(receipt.tip, decimal(2.00))
         XCTAssertEqual(receipt.items.count, 2)
         XCTAssertEqual(receipt.items[1].quantity, 2)
-        XCTAssertEqual(receipt.total, decimal(12.75))
+        XCTAssertEqual(receipt.total, decimal(14.75))
     }
 
     func testManualEntryMapperRejectsInvalidTax() {

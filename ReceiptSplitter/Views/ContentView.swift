@@ -12,22 +12,39 @@ import AppKit
 #endif
 
 struct ContentView: View {
+    @EnvironmentObject private var sessionStore: SessionStore
+
     let currentUser: AppUser
     let receiptRepository: ReceiptRepository
+    let userProfileRepository: UserProfileRepository
 
     @State private var receipts: [Receipt] = []
     @State private var isLoadingReceipts = false
     @State private var loadErrorMessage: String?
+    @State private var isAccountSheetPresented = false
+    @State private var accountDisplayName = ""
+    @State private var isSavingDisplayName = false
 
-    init(currentUser: AppUser, receiptRepository: ReceiptRepository = FirestoreReceiptRepository()) {
+    init(
+        currentUser: AppUser,
+        receiptRepository: ReceiptRepository = FirestoreReceiptRepository(),
+        userProfileRepository: UserProfileRepository = FirestoreUserProfileRepository()
+    ) {
         self.currentUser = currentUser
         self.receiptRepository = receiptRepository
+        self.userProfileRepository = userProfileRepository
     }
 
     var body: some View {
         TabView {
             NavigationStack {
-                HomeView(currentUserID: currentUser.id, receipts: receipts) { newReceipt in
+                HomeView(
+                    currentUserID: currentUser.id,
+                    receipts: receipts,
+                    userInitials: userInitials
+                ) {
+                    isAccountSheetPresented = true
+                } onReceiptSaved: { newReceipt in
                     receipts.insert(newReceipt, at: 0)
                     Task {
                         do {
@@ -43,14 +60,18 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                HistoryView(receipts: receipts)
+                HistoryView(currentUserID: currentUser.id, currentUserEmail: currentUser.email ?? "unknown@example.com", receipts: receipts)
             }
             .tabItem {
                 Label("History", systemImage: "clock")
             }
 
             NavigationStack {
-                ProfileView(participant: DemoData.profile)
+                AccountTabView(
+                    displayName: accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName,
+                    email: currentUser.email ?? "unknown@example.com",
+                    initials: userInitials
+                )
             }
             .tabItem {
                 Label("Profile", systemImage: "person")
@@ -59,6 +80,25 @@ struct ContentView: View {
         .tint(Color(red: 0.04, green: 0.45, blue: 0.95))
         .task {
             await loadReceipts()
+        }
+        .task {
+            await loadAccountProfile()
+        }
+        .sheet(isPresented: $isAccountSheetPresented) {
+            NavigationStack {
+                AccountProfileSheet(
+                    email: currentUser.email ?? "unknown@example.com",
+                    displayName: $accountDisplayName,
+                    isSaving: isSavingDisplayName,
+                    onSave: {
+                        Task { await saveDisplayName() }
+                    },
+                    onSignOut: {
+                        sessionStore.signOut()
+                        isAccountSheetPresented = false
+                    }
+                )
+            }
         }
         .alert("Sync Error", isPresented: Binding(
             get: { loadErrorMessage != nil },
@@ -87,6 +127,55 @@ struct ContentView: View {
         }
     }
 
+    private func loadAccountProfile() async {
+        do {
+            if let profile = try await userProfileRepository.fetchUserProfile(userID: currentUser.id),
+               !profile.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                accountDisplayName = profile.displayName
+            }
+        } catch {
+            // Non-blocking: profile data is optional for initial load.
+        }
+    }
+
+    private func saveDisplayName() async {
+        let trimmed = accountDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !isSavingDisplayName else { return }
+
+        isSavingDisplayName = true
+        defer { isSavingDisplayName = false }
+
+        do {
+            try await userProfileRepository.updateDisplayName(userID: currentUser.id, displayName: trimmed)
+            accountDisplayName = trimmed
+        } catch {
+            loadErrorMessage = "Failed to save display name."
+        }
+    }
+
+    private var userInitials: String {
+        let source = accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName
+        return initials(from: source)
+    }
+
+    private var defaultDisplayName: String {
+        guard let email = currentUser.email, !email.isEmpty else { return "User" }
+        return email.components(separatedBy: "@").first ?? "User"
+    }
+
+    private func initials(from text: String) -> String {
+        let parts = text
+            .split(separator: " ")
+            .map { String($0) }
+            .filter { !$0.isEmpty }
+
+        if parts.count >= 2 {
+            return String(parts[0].prefix(1) + parts[1].prefix(1)).uppercased()
+        }
+        return String(text.prefix(2)).uppercased()
+    }
+
     private func readableCloudErrorMessage(from error: Error) -> String {
         let nsError = error as NSError
         if nsError.domain == FirestoreErrorDomain {
@@ -109,6 +198,8 @@ struct ContentView: View {
 private struct HomeView: View {
     let currentUserID: String
     let receipts: [Receipt]
+    let userInitials: String
+    let onAccountTapped: () -> Void
     let onReceiptSaved: (Receipt) -> Void
 #if os(iOS)
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -164,11 +255,14 @@ private struct HomeView: View {
 
             Spacer()
 
-            Text(DemoData.profile.initials)
-                .font(.headline.weight(.bold))
-                .frame(width: 56, height: 56)
-                .background(Color.blue.opacity(0.15))
-                .clipShape(Circle())
+            Button(action: onAccountTapped) {
+                Text(userInitials)
+                    .font(.headline.weight(.bold))
+                    .frame(width: 56, height: 56)
+                    .background(Color.blue.opacity(0.15))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -1169,7 +1263,16 @@ private struct ActivityRow: View {
 }
 
 private struct HistoryView: View {
+    let currentUserID: String
+    let currentUserEmail: String
     let receipts: [Receipt]
+    private let splitSessionRepository = FirestoreSplitSessionRepository()
+    @State private var creatingSessionReceiptID: UUID?
+    @State private var sessionStatusMessage: String?
+    @State private var sessionErrorMessage: String?
+    @State private var joinCode: String = ""
+    @State private var isJoinSheetPresented = false
+    @State private var activeSessionRoute: SplitSessionRoute?
 
     var body: some View {
         Group {
@@ -1189,14 +1292,409 @@ private struct HistoryView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(Formatters.currencyString(from: receipt.total))
-                            .fontWeight(.semibold)
+                        VStack(alignment: .trailing, spacing: 8) {
+                            Text(Formatters.currencyString(from: receipt.total))
+                                .fontWeight(.semibold)
+                            Button {
+                                Task { await createSplitSession(from: receipt) }
+                            } label: {
+                                if creatingSessionReceiptID == receipt.id {
+                                    ProgressView()
+                                } else {
+                                    Label("Create Session", systemImage: "person.2.badge.plus")
+                                        .font(.caption.weight(.semibold))
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(creatingSessionReceiptID != nil)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
             }
         }
         .navigationTitle("History")
+        .toolbar {
+#if os(iOS)
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    isJoinSheetPresented = true
+                } label: {
+                    Label("Join Session", systemImage: "link.badge.plus")
+                }
+            }
+#else
+            ToolbarItem {
+                Button {
+                    isJoinSheetPresented = true
+                } label: {
+                    Label("Join Session", systemImage: "link.badge.plus")
+                }
+            }
+#endif
+        }
+        .sheet(isPresented: $isJoinSheetPresented) {
+            NavigationStack {
+                Form {
+                    Section("Join by Invite Code") {
+                        TextField("Invite Code", text: $joinCode)
+#if os(iOS)
+                            .textInputAutocapitalization(.characters)
+#endif
+                        Button("Join Session") {
+                            Task { await joinSession() }
+                        }
+                        .disabled(joinCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creatingSessionReceiptID != nil)
+                    }
+                }
+                .navigationTitle("Join Session")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { isJoinSheetPresented = false }
+                    }
+                }
+            }
+        }
+        .navigationDestination(item: $activeSessionRoute) { route in
+            SplitSessionDetailView(
+                sessionID: route.id,
+                currentUserID: currentUserID,
+                currentUserEmail: currentUserEmail
+            )
+        }
+        .alert("Split Session", isPresented: Binding(
+            get: { sessionStatusMessage != nil },
+            set: { if !$0 { sessionStatusMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(sessionStatusMessage ?? "")
+        }
+        .alert("Session Error", isPresented: Binding(
+            get: { sessionErrorMessage != nil },
+            set: { if !$0 { sessionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(sessionErrorMessage ?? "")
+        }
+    }
+
+    private func createSplitSession(from receipt: Receipt) async {
+        guard creatingSessionReceiptID == nil else { return }
+        creatingSessionReceiptID = receipt.id
+        defer { creatingSessionReceiptID = nil }
+
+        do {
+            let createdSession = try await splitSessionRepository.createSession(
+                from: receipt,
+                ownerUserId: currentUserID,
+                ownerDisplayName: currentUserEmail
+            )
+            activeSessionRoute = SplitSessionRoute(id: createdSession.id)
+        } catch {
+            sessionErrorMessage = "Failed to create session. \(error.localizedDescription)"
+        }
+    }
+
+    private func joinSession() async {
+        guard creatingSessionReceiptID == nil else { return }
+        creatingSessionReceiptID = UUID()
+        defer { creatingSessionReceiptID = nil }
+
+        do {
+            let session = try await splitSessionRepository.joinSession(
+                inviteCode: joinCode,
+                userId: currentUserID,
+                userDisplayName: currentUserEmail
+            )
+            joinCode = ""
+            isJoinSheetPresented = false
+            activeSessionRoute = SplitSessionRoute(id: session.id)
+        } catch {
+            sessionErrorMessage = "Join failed. \(error.localizedDescription)"
+        }
+    }
+}
+
+private struct SplitSessionRoute: Identifiable, Hashable {
+    let id: String
+}
+
+private struct SplitSessionDetailView: View {
+    let sessionID: String
+    let currentUserID: String
+    let currentUserEmail: String
+
+    private let repository = FirestoreSplitSessionRepository()
+    @State private var session: SplitSession?
+    @State private var listener: ListenerRegistration?
+    @State private var inviteCodeError: String?
+    @State private var inviteCodeStatus: String?
+    @State private var actionError: String?
+    @State private var editingMemberID: String?
+    @State private var editingDisplayName: String = ""
+
+    var body: some View {
+        List {
+            if let session {
+                Section("Session") {
+                    LabeledContent("Session ID", value: session.id)
+                    LabeledContent("Merchant", value: session.merchantName)
+                    LabeledContent("Status", value: session.status)
+                    if let code = session.inviteCode {
+                        LabeledContent("Invite Code", value: code)
+                    }
+                }
+
+                Section("Members") {
+                    ForEach(session.members) { member in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(member.displayName)
+                                Text(member.role)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if session.readyUserIds.contains(member.id) {
+                                Text("Ready")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.green)
+                            } else {
+                                Text(member.status)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if canEditDisplayName(memberID: member.id, session: session) {
+                                Button {
+                                    editingMemberID = member.id
+                                    editingDisplayName = member.displayName
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .foregroundStyle(.blue)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+
+                Section("Items") {
+                    ForEach(session.items) { item in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(item.name)
+                                Spacer()
+                                Text("x\(item.quantity) • \(Formatters.currencyString(from: item.unitPrice))")
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(session.members) { member in
+                                        Button {
+                                            Task { await toggleAssignment(item: item, memberID: member.id) }
+                                        } label: {
+                                            Text(member.displayName)
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 6)
+                                                .background(item.assignedUserIds.contains(member.id) ? Color.blue.opacity(0.2) : Color.gray.opacity(0.15))
+                                                .clipShape(Capsule())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                Section("Live Totals") {
+                    ForEach(SplitSessionCalculator.memberTotals(for: session), id: \.userId) { total in
+                        let displayName = session.members.first(where: { $0.id == total.userId })?.displayName ?? total.userId
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(displayName)
+                                .font(.headline)
+                            Text("Items: \(Formatters.currencyString(from: total.itemTotal))")
+                            Text("Tax: \(Formatters.currencyString(from: total.taxShare))")
+                            Text("Tip: \(Formatters.currencyString(from: total.tipShare))")
+                            Text("Total: \(Formatters.currencyString(from: total.grandTotal))")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                }
+
+                Section("Actions") {
+                    Button("Set Ready") {
+                        Task { await setReady(true) }
+                    }
+                    .disabled(session.readyUserIds.contains(currentUserID))
+
+                    Button("Set Not Ready") {
+                        Task { await setReady(false) }
+                    }
+                    .disabled(!session.readyUserIds.contains(currentUserID))
+
+                    if session.ownerUserId == currentUserID {
+                        Button("Generate Invite Code") {
+                            Task { await generateInviteCode(sessionID: session.id) }
+                        }
+
+                        if let code = session.inviteCode, !code.isEmpty {
+                            ShareLink(item: inviteShareMessage(code: code, sessionID: session.id)) {
+                                Label("Share Invite", systemImage: "square.and.arrow.up")
+                            }
+
+                            Button {
+                                copyInviteCode(code)
+                            } label: {
+                                Label("Copy Invite Code", systemImage: "doc.on.doc")
+                            }
+                        }
+
+                        Button("Finalize Session") {
+                            Task { await finalize(sessionID: session.id) }
+                        }
+                        .disabled(!SplitSessionAccess.canFinalize(session, userId: currentUserID))
+                    }
+                }
+            } else {
+                Section {
+                    ProgressView("Loading session...")
+                }
+            }
+        }
+        .navigationTitle("Split Session")
+        .task {
+            startListening()
+        }
+        .onDisappear {
+            listener?.remove()
+            listener = nil
+        }
+        .sheet(isPresented: Binding(
+            get: { editingMemberID != nil },
+            set: { if !$0 { editingMemberID = nil } }
+        )) {
+            NavigationStack {
+                Form {
+                    Section("Display Name") {
+                        TextField("Name", text: $editingDisplayName)
+                    }
+                }
+                .navigationTitle("Edit Name")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            editingMemberID = nil
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task { await saveDisplayName() }
+                        }
+                        .disabled(editingDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }
+        .alert("Invite", isPresented: Binding(get: { inviteCodeStatus != nil }, set: { if !$0 { inviteCodeStatus = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(inviteCodeStatus ?? "")
+        }
+        .alert("Error", isPresented: Binding(get: { actionError != nil || inviteCodeError != nil }, set: { if !$0 { actionError = nil; inviteCodeError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(actionError ?? inviteCodeError ?? "Unknown error")
+        }
+    }
+
+    private func startListening() {
+        guard listener == nil else { return }
+        listener = repository.observeSession(sessionID: sessionID) { updated in
+            self.session = updated
+        }
+    }
+
+    private func generateInviteCode(sessionID: String) async {
+        do {
+            let code = try await repository.createInviteCode(sessionID: sessionID, ownerUserId: currentUserID)
+            inviteCodeStatus = "Invite code: \(code)"
+        } catch {
+            inviteCodeError = error.localizedDescription
+        }
+    }
+
+    private func toggleAssignment(item: SplitSessionItem, memberID: String) async {
+        guard var session else { return }
+        var assigned = Set(item.assignedUserIds)
+        if assigned.contains(memberID) {
+            assigned.remove(memberID)
+        } else {
+            assigned.insert(memberID)
+        }
+        if assigned.isEmpty {
+            assigned.insert(currentUserID)
+        }
+        do {
+            try await repository.updateAssignments(sessionID: session.id, itemID: item.id, assignedUserIds: Array(assigned))
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func setReady(_ ready: Bool) async {
+        guard let session else { return }
+        do {
+            try await repository.setReadyState(sessionID: session.id, userId: currentUserID, isReady: ready)
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func finalize(sessionID: String) async {
+        do {
+            try await repository.finalizeSession(sessionID: sessionID, ownerUserId: currentUserID)
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func inviteShareMessage(code: String, sessionID: String) -> String {
+        "Join my SplitSmart session.\nInvite code: \(code)\nSession ID: \(sessionID)"
+    }
+
+    private func copyInviteCode(_ code: String) {
+#if os(iOS)
+        UIPasteboard.general.string = code
+#elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+#endif
+        inviteCodeStatus = "Invite code copied."
+    }
+
+    private func canEditDisplayName(memberID: String, session: SplitSession) -> Bool {
+        memberID == currentUserID || session.ownerUserId == currentUserID
+    }
+
+    private func saveDisplayName() async {
+        guard let memberID = editingMemberID else { return }
+        do {
+            try await repository.updateMemberDisplayName(
+                sessionID: sessionID,
+                memberID: memberID,
+                displayName: editingDisplayName
+            )
+            editingMemberID = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
     }
 }
 
@@ -1221,24 +1719,63 @@ private struct EmptyActivityCard: View {
     }
 }
 
-private struct ProfileView: View {
-    let participant: Participant
-
+private struct AccountTabView: View {
+    let displayName: String
+    let email: String
+    let initials: String
     var body: some View {
         VStack(spacing: 16) {
-            Text(participant.initials)
+            Text(initials)
                 .font(.system(size: 40, weight: .bold))
                 .frame(width: 88, height: 88)
                 .background(Color.blue.opacity(0.16))
                 .clipShape(Circle())
-            Text(participant.name)
+            Text(displayName)
                 .font(.title2.weight(.bold))
-            Text("Split smarter with friends.")
+            Text(email)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColors.groupedBackground)
         .navigationTitle("Profile")
+    }
+}
+
+private struct AccountProfileSheet: View {
+    let email: String
+    @Binding var displayName: String
+    let isSaving: Bool
+    let onSave: () -> Void
+    let onSignOut: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Form {
+            Section("Account") {
+                LabeledContent("Email", value: email)
+                TextField("Display Name", text: $displayName)
+            }
+
+            Section {
+                Button(isSaving ? "Saving..." : "Save Profile") {
+                    onSave()
+                }
+                .disabled(isSaving || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Section {
+                Button("Sign Out", role: .destructive) {
+                    onSignOut()
+                }
+            }
+        }
+        .navigationTitle("Account")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }
+            }
+        }
     }
 }
 
