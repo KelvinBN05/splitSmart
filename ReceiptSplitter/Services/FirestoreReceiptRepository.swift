@@ -65,7 +65,8 @@ final class FirestoreReceiptInviteRepository {
 
         let batch = db.batch()
         for recipient in recipients {
-            let inviteID = UUID().uuidString
+            let inviteID = "\(receipt.id.uuidString)__\(recipient.id)"
+                .replacingOccurrences(of: "/", with: "_")
             let ref = db.collection("receiptInvites").document(inviteID)
             batch.setData([
                 "senderId": ownerUserId,
@@ -73,6 +74,7 @@ final class FirestoreReceiptInviteRepository {
                 "senderEmail": ownerEmail,
                 "recipientId": recipient.id,
                 "recipientEmail": recipient.email,
+                "sourceReceiptId": receipt.id.uuidString,
                 "status": "pending",
                 "receipt": receiptPayload,
                 "createdAt": FieldValue.serverTimestamp(),
@@ -407,6 +409,7 @@ final class FirestoreSplitSessionRepository {
 enum FirestoreReceiptMapper {
     static func encodeReceipt(_ receipt: Receipt, ownerUserId: String) -> [String: Any] {
         var payload: [String: Any] = [
+            "id": receipt.id.uuidString,
             "ownerUserId": ownerUserId,
             "merchantName": receipt.merchantName,
             "createdAt": Timestamp(date: receipt.createdAt),
@@ -690,7 +693,10 @@ enum FirestoreReceiptInviteMapper {
             )
         }
 
+        let receiptID = (data["id"] as? String).flatMap(UUID.init(uuidString:)) ?? UUID()
+
         return Receipt(
+            id: receiptID,
             merchantName: merchantName,
             createdAt: createdAtTimestamp.dateValue(),
             participants: participants,

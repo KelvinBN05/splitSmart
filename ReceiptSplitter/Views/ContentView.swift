@@ -18,6 +18,7 @@ struct ContentView: View {
     let currentUser: AppUser
     let receiptRepository: ReceiptRepository
     let userProfileRepository: UserProfileRepository
+    private let receiptInviteRepository = FirestoreReceiptInviteRepository()
 
     @State private var receipts: [Receipt] = []
     @State private var isLoadingReceipts = false
@@ -26,6 +27,8 @@ struct ContentView: View {
     @State private var accountDisplayName = ""
     @State private var isSavingDisplayName = false
     @State private var friends: [AppFriend] = []
+    @State private var incomingReceiptInvites: [ReceiptInvite] = []
+    @State private var isLoadingIncomingInvites = false
 
     init(
         currentUser: AppUser,
@@ -54,6 +57,7 @@ struct ContentView: View {
                     Task {
                         do {
                             try await receiptRepository.saveReceipt(newReceipt, ownerUserId: currentUser.id)
+                            try await sendInvitesIfNeeded(for: newReceipt)
                         } catch {
                             loadErrorMessage = "Saved locally, but failed to sync to cloud."
                         }
@@ -69,13 +73,21 @@ struct ContentView: View {
                     currentUserID: currentUser.id,
                     currentUserEmail: currentUser.email ?? "unknown@example.com",
                     receipts: receipts,
+                    incomingInvites: incomingReceiptInvites,
                     friends: friends,
                     isLoadingReceipts: isLoadingReceipts,
+                    isLoadingInvites: isLoadingIncomingInvites,
                     onDeleteReceipt: { receipt in
                         await deleteReceipt(receipt)
                     },
                     onSaveReceipt: { receipt in
                         await saveReceiptChanges(receipt)
+                    },
+                    onAcceptInvite: { invite in
+                        await acceptReceiptInvite(invite)
+                    },
+                    onDeclineInvite: { invite in
+                        await declineReceiptInvite(invite)
                     }
                 )
             }
@@ -106,6 +118,9 @@ struct ContentView: View {
         }
         .task {
             await loadFriends()
+        }
+        .task {
+            await loadIncomingReceiptInvites()
         }
         .sheet(isPresented: $isAccountSheetPresented) {
             NavigationStack {
@@ -170,8 +185,67 @@ struct ContentView: View {
 
         do {
             try await receiptRepository.saveReceipt(receipt, ownerUserId: currentUser.id)
+            try await sendInvitesIfNeeded(for: receipt)
         } catch {
             loadErrorMessage = "Failed to save split changes. \(readableCloudErrorMessage(from: error))"
+        }
+    }
+
+    private func sendInvitesIfNeeded(for receipt: Receipt) async throws {
+        let recipients = matchingFriends(from: receipt)
+        guard !recipients.isEmpty else { return }
+
+        try await receiptInviteRepository.sendInvites(
+            receipt: receipt,
+            ownerUserId: currentUser.id,
+            ownerDisplayName: accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName,
+            ownerEmail: currentUser.email ?? "unknown@example.com",
+            recipients: recipients
+        )
+    }
+
+    private func matchingFriends(from receipt: Receipt) -> [AppFriend] {
+        let participantNames = Set(
+            receipt.participants.map {
+                $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }
+        )
+
+        return friends.filter { friend in
+            guard friend.id != currentUser.id else { return false }
+            let display = friend.displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return participantNames.contains(display)
+        }
+    }
+
+    private func loadIncomingReceiptInvites() async {
+        guard !isLoadingIncomingInvites else { return }
+        isLoadingIncomingInvites = true
+        defer { isLoadingIncomingInvites = false }
+
+        do {
+            incomingReceiptInvites = try await receiptInviteRepository.fetchIncomingInvites(userId: currentUser.id)
+        } catch {
+            loadErrorMessage = "Failed to load invites. \(readableCloudErrorMessage(from: error))"
+        }
+    }
+
+    private func acceptReceiptInvite(_ invite: ReceiptInvite) async {
+        do {
+            try await receiptInviteRepository.acceptInvite(inviteID: invite.id, currentUserId: currentUser.id)
+            await loadIncomingReceiptInvites()
+            await loadReceipts()
+        } catch {
+            loadErrorMessage = "Failed to accept invite. \(readableCloudErrorMessage(from: error))"
+        }
+    }
+
+    private func declineReceiptInvite(_ invite: ReceiptInvite) async {
+        do {
+            try await receiptInviteRepository.declineInvite(inviteID: invite.id, currentUserId: currentUser.id)
+            await loadIncomingReceiptInvites()
+        } catch {
+            loadErrorMessage = "Failed to decline invite. \(readableCloudErrorMessage(from: error))"
         }
     }
 
@@ -1578,10 +1652,14 @@ private struct HistoryView: View {
     let currentUserID: String
     let currentUserEmail: String
     let receipts: [Receipt]
+    let incomingInvites: [ReceiptInvite]
     let friends: [AppFriend]
     let isLoadingReceipts: Bool
+    let isLoadingInvites: Bool
     let onDeleteReceipt: (Receipt) async -> Void
     let onSaveReceipt: (Receipt) async -> Void
+    let onAcceptInvite: (ReceiptInvite) async -> Void
+    let onDeclineInvite: (ReceiptInvite) async -> Void
 
     @State private var deleteCandidate: Receipt?
     @State private var selectedReceipt: Receipt?
@@ -1618,14 +1696,14 @@ private struct HistoryView: View {
 
     @ViewBuilder
     private var historyContent: some View {
-        if isLoadingReceipts && receipts.isEmpty {
+        if isLoadingReceipts && isLoadingInvites && receipts.isEmpty && incomingInvites.isEmpty {
             VStack(spacing: 12) {
                 ProgressView()
-                Text("Loading receipts...")
+                Text("Loading history...")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if receipts.isEmpty {
+        } else if receipts.isEmpty && incomingInvites.isEmpty {
             ContentUnavailableView(
                 "No Receipts Yet",
                 systemImage: "doc.text.magnifyingglass",
@@ -1634,6 +1712,9 @@ private struct HistoryView: View {
         } else {
             ScrollView {
                 VStack(spacing: 12) {
+                    if !incomingInvites.isEmpty {
+                        inviteSection
+                    }
                     ForEach(receipts) { receipt in
                         receiptCard(receipt)
                     }
@@ -1642,6 +1723,63 @@ private struct HistoryView: View {
                 .padding(.vertical, 14)
             }
         }
+    }
+
+    private var inviteSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Receipt Invites")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 2)
+
+            ForEach(incomingInvites) { invite in
+                inviteCard(invite)
+            }
+        }
+    }
+
+    private func inviteCard(_ invite: ReceiptInvite) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(invite.receipt.merchantName)
+                        .font(.headline)
+                    Text("From \(invite.senderDisplayName)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(Formatters.currencyString(from: invite.receipt.total))
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await onAcceptInvite(invite) }
+                } label: {
+                    Label("Accept", systemImage: "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button(role: .destructive) {
+                    Task { await onDeclineInvite(invite) }
+                } label: {
+                    Label("Decline", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(16)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
 
     private func receiptCard(_ receipt: Receipt) -> some View {
