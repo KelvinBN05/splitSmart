@@ -196,6 +196,16 @@ struct ContentView: View {
 }
 
 private struct HomeView: View {
+    private enum ScanFlowStage {
+        case idle
+        case uploading
+        case processing
+        case review
+        case saving
+        case saved
+        case failed
+    }
+
     let currentUserID: String
     let receipts: [Receipt]
     let userInitials: String
@@ -208,6 +218,9 @@ private struct HomeView: View {
     @State private var photoProcessingError: String?
     @State private var parsedPrefill: ManualEntryPrefill?
     @State private var reviewPrefill: OCRReviewPrefill?
+    @State private var scanFlowStage: ScanFlowStage = .idle
+    @State private var scanFlowDetail = "Upload a receipt photo to start."
+    @State private var latestOCRJobID: String?
 
     var body: some View {
         ScrollView {
@@ -225,7 +238,7 @@ private struct HomeView: View {
         .navigationTitle("SplitSmart")
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: selectedPhotoItem) { item in
+        .onChange(of: selectedPhotoItem) { _, item in
             guard let item else { return }
             Task {
                 await processPhotoSelection(item)
@@ -233,10 +246,16 @@ private struct HomeView: View {
         }
 #endif
         .navigationDestination(item: $parsedPrefill) { prefill in
-            ManualEntryView(prefill: prefill, onReceiptSaved: onReceiptSaved)
+            ManualEntryView(prefill: prefill) { savedReceipt in
+                scanFlowStage = .saved
+                scanFlowDetail = "Receipt saved to History."
+                onReceiptSaved(savedReceipt)
+            }
         }
         .navigationDestination(item: $reviewPrefill) { review in
             OCRReviewView(prefill: review.prefill) { approvedPrefill in
+                scanFlowStage = .saving
+                scanFlowDetail = "Apply edits and tap Save to History."
                 parsedPrefill = approvedPrefill
             }
         }
@@ -302,12 +321,12 @@ private struct HomeView: View {
 #if os(iOS)
                 PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                     SmallActionCard(
-                        title: isProcessingPhoto ? "Reading Receipt..." : "Upload Photo",
+                        title: isBusy ? "Scanning..." : "Upload Photo",
                         systemImage: "photo"
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(isProcessingPhoto)
+                .disabled(isProcessingPhoto || isBusy)
 #else
                 SmallActionCard(title: "Upload Photo", systemImage: "photo")
 #endif
@@ -326,7 +345,114 @@ private struct HomeView: View {
                     .foregroundStyle(.red)
             }
 
+            scanFlowStatusCard
         }
+    }
+
+    private var scanFlowStatusCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: scanFlowIconName)
+                    .foregroundStyle(scanFlowTint)
+                Text(scanFlowTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                Spacer()
+            }
+
+            Text(scanFlowDetail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if isBusy {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+
+            if let latestOCRJobID, !latestOCRJobID.isEmpty {
+                Text("OCR Job: \(latestOCRJobID)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if scanFlowStage == .failed || scanFlowStage == .saved {
+                Button("Reset Scan Status") {
+                    resetScanStatus()
+                }
+                .font(.footnote.weight(.semibold))
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(scanFlowTint.opacity(0.20), lineWidth: 1)
+        )
+    }
+
+    private var scanFlowTitle: String {
+        switch scanFlowStage {
+        case .idle:
+            return "Ready to scan"
+        case .uploading:
+            return "Uploading photo"
+        case .processing:
+            return "Running OCR"
+        case .review:
+            return "Review OCR result"
+        case .saving:
+            return "Ready to save"
+        case .saved:
+            return "Saved"
+        case .failed:
+            return "Scan failed"
+        }
+    }
+
+    private var scanFlowIconName: String {
+        switch scanFlowStage {
+        case .idle:
+            return "camera.viewfinder"
+        case .uploading:
+            return "arrow.up.circle"
+        case .processing:
+            return "cpu"
+        case .review:
+            return "doc.text.magnifyingglass"
+        case .saving:
+            return "square.and.pencil"
+        case .saved:
+            return "checkmark.circle"
+        case .failed:
+            return "exclamationmark.triangle"
+        }
+    }
+
+    private var scanFlowTint: Color {
+        switch scanFlowStage {
+        case .saved:
+            return .green
+        case .failed:
+            return .red
+        case .idle:
+            return .secondary
+        default:
+            return .blue
+        }
+    }
+
+    private var isBusy: Bool {
+        scanFlowStage == .uploading || scanFlowStage == .processing
+    }
+
+    private func resetScanStatus() {
+        scanFlowStage = .idle
+        scanFlowDetail = "Upload a receipt photo to start."
+        photoProcessingError = nil
+        latestOCRJobID = nil
     }
 
 #if os(iOS)
@@ -334,27 +460,47 @@ private struct HomeView: View {
         guard !isProcessingPhoto else { return }
         isProcessingPhoto = true
         photoProcessingError = nil
+        scanFlowStage = .uploading
+        scanFlowDetail = "Sending receipt image to cloud OCR."
         defer { isProcessingPhoto = false }
 
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
                 photoProcessingError = "Unable to read selected photo."
+                scanFlowStage = .failed
+                scanFlowDetail = "Could not read selected photo."
                 return
             }
             guard UIImage(data: data) != nil else {
                 photoProcessingError = "Could not process that image format."
+                scanFlowStage = .failed
+                scanFlowDetail = "Could not process that image format."
                 return
             }
 
             let prefill = try await DocumentAIOCRJobService.createAndAwaitOCRJob(
                 imageData: data,
-                ownerUserID: currentUserID
-            )
+                ownerUserID: currentUserID,
+                onStatusChange: { status in
+                switch status {
+                case .uploading:
+                    scanFlowStage = .uploading
+                    scanFlowDetail = "Uploading image to storage."
+                case .processing:
+                    scanFlowStage = .processing
+                    scanFlowDetail = "Waiting for OCR extraction."
+                }
+            })
 
+            latestOCRJobID = prefill.sourceOCRJobID
+            scanFlowStage = .review
+            scanFlowDetail = "Review extracted items before saving."
             reviewPrefill = OCRReviewPrefill(prefill: prefill)
             selectedPhotoItem = nil
         } catch {
             photoProcessingError = error.localizedDescription
+            scanFlowStage = .failed
+            scanFlowDetail = error.localizedDescription
         }
     }
 #endif
@@ -387,6 +533,11 @@ private enum DocumentAIOCRJobService {
     private static let db = Firestore.firestore()
     private static let storage = Storage.storage()
 
+    enum OCRPipelineStatus {
+        case uploading
+        case processing
+    }
+
     enum OCRJobError: LocalizedError {
         case timedOut
         case failed(String)
@@ -404,11 +555,16 @@ private enum DocumentAIOCRJobService {
         }
     }
 
-    static func createAndAwaitOCRJob(imageData: Data, ownerUserID: String) async throws -> ManualEntryPrefill {
+    static func createAndAwaitOCRJob(
+        imageData: Data,
+        ownerUserID: String,
+        onStatusChange: ((OCRPipelineStatus) -> Void)? = nil
+    ) async throws -> ManualEntryPrefill {
         let jobID = UUID().uuidString
         let imagePath = "users/\(ownerUserID)/ocrUploads/\(jobID).jpg"
         let jobRef = db.collection("users").document(ownerUserID).collection("ocrJobs").document(jobID)
 
+        onStatusChange?(.uploading)
         let metadata = StorageMetadata()
         metadata.contentType = "image/jpeg"
         _ = try await storage.reference(withPath: imagePath).putDataAsync(imageData, metadata: metadata)
@@ -421,6 +577,7 @@ private enum DocumentAIOCRJobService {
             "updatedAt": FieldValue.serverTimestamp()
         ], merge: true)
 
+        onStatusChange?(.processing)
         var prefill = try await waitForCompletion(jobRef: jobRef, timeoutSeconds: 60)
         prefill.sourceOCRJobID = jobID
         return prefill
@@ -1631,7 +1788,7 @@ private struct SplitSessionDetailView: View {
     }
 
     private func toggleAssignment(item: SplitSessionItem, memberID: String) async {
-        guard var session else { return }
+        guard let session else { return }
         var assigned = Set(item.assignedUserIds)
         if assigned.contains(memberID) {
             assigned.remove(memberID)

@@ -132,7 +132,7 @@ final class FirestoreSplitSessionRepository {
         }
 
         let sessionRef = db.collection("splitSessions").document(sessionID)
-        try await db.runTransaction { transaction, errorPointer in
+        _ = try await db.runTransaction { transaction, errorPointer in
             do {
                 let sessionSnap = try transaction.getDocument(sessionRef)
                 guard var data = sessionSnap.data(),
