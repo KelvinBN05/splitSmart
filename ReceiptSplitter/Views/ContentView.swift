@@ -1574,6 +1574,7 @@ private struct HistoryView: View {
     private let inviteRepository = FirestoreReceiptInviteRepository()
     @State private var inviteFriendsReceipt: Receipt?
     @State private var selectedFriendIDs: Set<String> = []
+    @State private var itemAssigneeByItemID: [UUID: String] = [:]
     @State private var incomingInvites: [ReceiptInvite] = []
     @State private var isLoadingInvites = false
     @State private var mutatingInviteID: String?
@@ -1698,6 +1699,9 @@ private struct HistoryView: View {
             HStack(spacing: 10) {
                 Button {
                     selectedFriendIDs = []
+                    itemAssigneeByItemID = receipt.items.reduce(into: [:]) { partial, item in
+                        partial[item.id] = currentUserID
+                    }
                     inviteFriendsReceipt = receipt
                 } label: {
                     Label("Add Friends", systemImage: "person.crop.circle.badge.plus")
@@ -1728,8 +1732,13 @@ private struct HistoryView: View {
     }
 
     private func inviteFriendsSheet(for receipt: Receipt) -> some View {
-        NavigationStack {
-            List {
+        let selectedFriends = friends.filter { selectedFriendIDs.contains($0.id) }
+        let assignmentChoices = [AssignmentChoice(id: currentUserID, name: "You")] + selectedFriends.map {
+            AssignmentChoice(id: $0.id, name: $0.displayName)
+        }
+
+        return NavigationStack {
+            Form {
                 Section("Select Friends") {
                     if friends.isEmpty {
                         Text("No friends available. Add friends from Profile first.")
@@ -1761,6 +1770,44 @@ private struct HistoryView: View {
                         }
                     }
                 }
+
+                if !selectedFriends.isEmpty {
+                    Section("Pre-calculate Split") {
+                        ForEach(receipt.items) { item in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text(item.name)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                    Text(Formatters.currencyString(from: item.subtotal))
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Picker("Assigned To", selection: assigneeBinding(for: item.id)) {
+                                    ForEach(assignmentChoices) { choice in
+                                        Text(choice.name).tag(choice.id)
+                                    }
+                                }
+#if os(iOS)
+                                .pickerStyle(.menu)
+#endif
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+
+                    Section("Split Preview") {
+                        ForEach(previewRows(for: receipt, choices: assignmentChoices), id: \.id) { row in
+                            HStack {
+                                Text(row.name)
+                                Spacer()
+                                Text(Formatters.currencyString(from: row.total))
+                                    .fontWeight(.semibold)
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("Add Friends")
             .toolbar {
@@ -1769,13 +1816,70 @@ private struct HistoryView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Send Invites") {
-                        let selectedFriends = friends.filter { selectedFriendIDs.contains($0.id) }
+                        let preparedReceipt = makePreparedReceipt(from: receipt, selectedFriends: selectedFriends)
                         inviteFriendsReceipt = nil
-                        Task { await sendReceiptInvites(from: receipt, selectedFriends: selectedFriends) }
+                        Task { await sendReceiptInvites(from: preparedReceipt, selectedFriends: selectedFriends) }
                     }
                     .disabled(isSendingInvites || selectedFriendIDs.isEmpty)
                 }
             }
+        }
+    }
+
+    private func assigneeBinding(for itemID: UUID) -> Binding<String> {
+        Binding(
+            get: { itemAssigneeByItemID[itemID] ?? currentUserID },
+            set: { itemAssigneeByItemID[itemID] = $0 }
+        )
+    }
+
+    private func makePreparedReceipt(from receipt: Receipt, selectedFriends: [AppFriend]) -> Receipt {
+        var participantIDByKey: [String: UUID] = [:]
+        var participants: [Participant] = []
+
+        let meParticipant = Participant(name: "You")
+        participantIDByKey[currentUserID] = meParticipant.id
+        participants.append(meParticipant)
+
+        for friend in selectedFriends {
+            let participant = Participant(name: friend.displayName)
+            participantIDByKey[friend.id] = participant.id
+            participants.append(participant)
+        }
+
+        let preparedItems: [ReceiptItem] = receipt.items.map { item in
+            let assigneeKey = itemAssigneeByItemID[item.id] ?? currentUserID
+            let assignedParticipantID = participantIDByKey[assigneeKey] ?? meParticipant.id
+            return ReceiptItem(
+                id: item.id,
+                name: item.name,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                assignedParticipantIDs: [assignedParticipantID]
+            )
+        }
+
+        return Receipt(
+            id: receipt.id,
+            merchantName: receipt.merchantName,
+            createdAt: receipt.createdAt,
+            participants: participants,
+            items: preparedItems,
+            tax: receipt.tax,
+            tip: receipt.tip,
+            sourceOCRJobID: receipt.sourceOCRJobID
+        )
+    }
+
+    private func previewRows(for receipt: Receipt, choices: [AssignmentChoice]) -> [AssignmentPreviewRow] {
+        var totalsByAssignee: [String: Decimal] = [:]
+        for item in receipt.items {
+            let assignee = itemAssigneeByItemID[item.id] ?? currentUserID
+            totalsByAssignee[assignee, default: 0] += item.subtotal
+        }
+
+        return choices.map { choice in
+            AssignmentPreviewRow(id: choice.id, name: choice.name, total: totalsByAssignee[choice.id] ?? 0)
         }
     }
 
@@ -1876,10 +1980,24 @@ private struct HistoryView: View {
     private func toggleFriendSelection(_ userID: String) {
         if selectedFriendIDs.contains(userID) {
             selectedFriendIDs.remove(userID)
+            for (itemID, assignee) in itemAssigneeByItemID where assignee == userID {
+                itemAssigneeByItemID[itemID] = currentUserID
+            }
         } else {
             selectedFriendIDs.insert(userID)
         }
     }
+}
+
+private struct AssignmentChoice: Identifiable {
+    let id: String
+    let name: String
+}
+
+private struct AssignmentPreviewRow: Identifiable {
+    let id: String
+    let name: String
+    let total: Decimal
 }
 
 private struct SplitSessionDetailView: View {
