@@ -1437,6 +1437,18 @@ private struct SplitSessionDetailView: View {
                             Task { await generateInviteCode(sessionID: session.id) }
                         }
 
+                        if let code = session.inviteCode, !code.isEmpty {
+                            ShareLink(item: inviteShareMessage(code: code, sessionID: session.id)) {
+                                Label("Share Invite", systemImage: "square.and.arrow.up")
+                            }
+
+                            Button {
+                                copyInviteCode(code)
+                            } label: {
+                                Label("Copy Invite Code", systemImage: "doc.on.doc")
+                            }
+                        }
+
                         Button("Finalize Session") {
                             Task { await finalize(sessionID: session.id) }
                         }
@@ -1518,6 +1530,20 @@ private struct SplitSessionDetailView: View {
         } catch {
             actionError = error.localizedDescription
         }
+    }
+
+    private func inviteShareMessage(code: String, sessionID: String) -> String {
+        "Join my SplitSmart session.\nInvite code: \(code)\nSession ID: \(sessionID)"
+    }
+
+    private func copyInviteCode(_ code: String) {
+#if os(iOS)
+        UIPasteboard.general.string = code
+#elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
+#endif
+        inviteCodeStatus = "Invite code copied."
     }
 }
 
