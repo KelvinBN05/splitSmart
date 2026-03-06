@@ -421,7 +421,7 @@ private struct HomeView: View {
             .padding(.bottom, 28)
         }
         .background(AppColors.groupedBackground)
-        .navigationTitle("SplitSmart")
+        .navigationTitle("Home")
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: selectedPhotoItem) { _, item in
@@ -461,13 +461,12 @@ private struct HomeView: View {
 
     private var header: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("SplitSmart")
-                    .font(.largeTitle.weight(.bold))
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Welcome back")
+                    .font(.title2.weight(.bold))
                     .foregroundStyle(Color(red: 0.06, green: 0.10, blue: 0.22))
-                    .minimumScaleFactor(0.85)
-                Text(Formatters.fullDate.string(from: Date()))
-                    .font(.title3)
+                Text("Scan, split, and share receipts.")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
 
