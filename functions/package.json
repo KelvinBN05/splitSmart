@@ -5,6 +5,9 @@
     "node": "20"
   },
   "main": "index.js",
+  "scripts": {
+    "test": "node --test tests/parser.test.js"
+  },
   "dependencies": {
     "@google-cloud/documentai": "latest",
     "firebase-admin": "^12.7.0",

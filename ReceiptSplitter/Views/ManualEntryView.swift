@@ -7,6 +7,7 @@ struct ManualEntryView: View {
     @State private var participantNames = "You"
     @State private var tax: String
     @State private var tip: String
+    @State private var sourceOCRJobID: String?
     @State private var itemDrafts: [ManualEntryItemDraft]
     @State private var splitResult: ManualSplitResult?
     @State private var submitErrorMessage: String?
@@ -17,6 +18,7 @@ struct ManualEntryView: View {
         _merchantName = State(initialValue: prefill?.merchantName ?? "")
         _tax = State(initialValue: prefill?.tax ?? "")
         _tip = State(initialValue: prefill?.tip ?? "")
+        _sourceOCRJobID = State(initialValue: prefill?.sourceOCRJobID)
 
         let mappedItems = (prefill?.items ?? []).map { item in
             ManualEntryItemDraft(
@@ -202,9 +204,10 @@ struct ManualEntryView: View {
             }
         )
 
-        let receipt: Receipt
+        var receipt: Receipt
         do {
             receipt = try ManualEntryMapper.makeReceipt(input: input, participantNames: parsedParticipants)
+            receipt.sourceOCRJobID = sourceOCRJobID
         } catch let error as ManualEntryMapper.MapperError {
             submitErrorMessage = mapperErrorText(error)
             return

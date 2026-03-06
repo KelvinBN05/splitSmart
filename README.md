@@ -48,7 +48,14 @@ This project now uses a backend OCR job flow for receipt parsing:
 1. iOS uploads image to Storage under `users/{uid}/ocrUploads/{jobId}.jpg`
 2. iOS creates Firestore doc `users/{uid}/ocrJobs/{jobId}`
 3. Cloud Function `processOCRJob` calls Document AI and writes parsed fields to `result`
-4. iOS polls job status and opens Manual Entry with prefilled fields
+4. iOS polls job status, opens a Review OCR screen, then opens Manual Entry with prefilled fields
+
+### OCR review behavior
+
+- Edit OCR item `name`, `qty`, `price` inline
+- Quick delete rows
+- Optional `Mark as discount` toggle to exclude lines before manual entry
+- Saved receipts include `sourceOCRJobID` for traceability/debugging
 
 ### One-time setup
 
@@ -72,4 +79,11 @@ firebase functions:config:set \
 
 cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart"
 firebase deploy --only firestore:rules,storage,functions --project recieptsplitter
+```
+
+### Parser regression tests
+
+```bash
+cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart/functions"
+npm test
 ```

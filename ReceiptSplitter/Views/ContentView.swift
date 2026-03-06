@@ -116,6 +116,7 @@ private struct HomeView: View {
     @State private var isProcessingPhoto = false
     @State private var photoProcessingError: String?
     @State private var parsedPrefill: ManualEntryPrefill?
+    @State private var reviewPrefill: OCRReviewPrefill?
 
     var body: some View {
         ScrollView {
@@ -142,6 +143,11 @@ private struct HomeView: View {
 #endif
         .navigationDestination(item: $parsedPrefill) { prefill in
             ManualEntryView(prefill: prefill, onReceiptSaved: onReceiptSaved)
+        }
+        .navigationDestination(item: $reviewPrefill) { review in
+            OCRReviewView(prefill: review.prefill) { approvedPrefill in
+                parsedPrefill = approvedPrefill
+            }
         }
     }
 
@@ -251,7 +257,7 @@ private struct HomeView: View {
                 ownerUserID: currentUserID
             )
 
-            parsedPrefill = prefill
+            reviewPrefill = OCRReviewPrefill(prefill: prefill)
             selectedPhotoItem = nil
         } catch {
             photoProcessingError = error.localizedDescription
@@ -321,7 +327,9 @@ private enum DocumentAIOCRJobService {
             "updatedAt": FieldValue.serverTimestamp()
         ], merge: true)
 
-        return try await waitForCompletion(jobRef: jobRef, timeoutSeconds: 60)
+        var prefill = try await waitForCompletion(jobRef: jobRef, timeoutSeconds: 60)
+        prefill.sourceOCRJobID = jobID
+        return prefill
     }
 
     private static func waitForCompletion(
@@ -384,7 +392,8 @@ private enum DocumentAIOCRJobService {
             merchantName: merchantName,
             tax: tax,
             tip: tip,
-            items: items
+            items: items,
+            sourceOCRJobID: nil
         )
     }
 
@@ -406,6 +415,120 @@ private enum DocumentAIOCRJobService {
     }
 }
 #endif
+
+private struct OCRReviewPrefill: Identifiable, Hashable {
+    let id = UUID()
+    var prefill: ManualEntryPrefill
+}
+
+private struct OCRReviewRow: Identifiable, Hashable {
+    let id = UUID()
+    var name: String
+    var quantity: Int
+    var price: String
+    var isDiscount: Bool
+
+    init(item: ManualEntryPrefill.Item) {
+        name = item.name
+        quantity = item.quantity
+        price = item.price
+        let lower = item.name.lowercased()
+        isDiscount = lower.contains("coupon") || lower.contains("saved") || lower.contains("discount")
+    }
+}
+
+private struct OCRReviewView: View {
+    let prefill: ManualEntryPrefill
+    let onContinue: (ManualEntryPrefill) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var merchantName: String
+    @State private var tax: String
+    @State private var tip: String
+    @State private var rows: [OCRReviewRow]
+
+    init(prefill: ManualEntryPrefill, onContinue: @escaping (ManualEntryPrefill) -> Void) {
+        self.prefill = prefill
+        self.onContinue = onContinue
+        _merchantName = State(initialValue: prefill.merchantName)
+        _tax = State(initialValue: prefill.tax)
+        _tip = State(initialValue: prefill.tip)
+        _rows = State(initialValue: prefill.items.map { OCRReviewRow(item: $0) })
+    }
+
+    var body: some View {
+        List {
+            Section("Receipt") {
+                TextField("Merchant", text: $merchantName)
+                TextField("Tax", text: $tax)
+                TextField("Tip", text: $tip)
+            }
+
+            Section("Review OCR Items") {
+                ForEach($rows) { $row in
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("Item name", text: $row.name)
+                        HStack(spacing: 12) {
+                            Stepper("Qty \(row.quantity)", value: $row.quantity, in: 1...99)
+                            TextField("Price", text: $row.price)
+                                .multilineTextAlignment(.trailing)
+                        }
+                        Toggle("Mark as discount", isOn: $row.isDiscount)
+                            .font(.footnote)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .onDelete { offsets in
+                    rows.remove(atOffsets: offsets)
+                }
+
+                Button {
+                    rows.append(OCRReviewRow(item: .init(name: "", quantity: 1, price: "")))
+                } label: {
+                    Label("Add Row", systemImage: "plus.circle")
+                }
+            }
+        }
+        .navigationTitle("Review OCR")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Continue") {
+                    onContinue(makeApprovedPrefill())
+                }
+                .disabled(validRows.isEmpty)
+            }
+        }
+    }
+
+    private var validRows: [OCRReviewRow] {
+        rows.filter {
+            !$0.isDiscount &&
+            !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            Decimal(string: $0.price.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)) != nil
+        }
+    }
+
+    private func makeApprovedPrefill() -> ManualEntryPrefill {
+        let cleanedItems: [ManualEntryPrefill.Item] = validRows.map { row in
+            ManualEntryPrefill.Item(
+                name: row.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                quantity: max(1, row.quantity),
+                price: row.price.replacingOccurrences(of: "$", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+
+        return ManualEntryPrefill(
+            merchantName: merchantName.trimmingCharacters(in: .whitespacesAndNewlines),
+            tax: tax.trimmingCharacters(in: .whitespacesAndNewlines),
+            tip: tip.trimmingCharacters(in: .whitespacesAndNewlines),
+            items: cleanedItems,
+            sourceOCRJobID: prefill.sourceOCRJobID
+        )
+    }
+}
 
 private struct OCRSegment: Identifiable, Hashable {
     let id = UUID()

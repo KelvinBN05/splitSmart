@@ -92,6 +92,7 @@ function mapReceiptFromDocumentAI(document) {
   const entities = document?.entities || [];
   const lines = extractLinesFromDocument(document);
   const rawText = String(document?.text || "");
+  const totals = parseTotalsFromLines(lines);
 
   const merchantName =
     firstEntityText(entities, ["supplier_name", "merchant_name"]) || detectMerchantFromLines(lines);
@@ -135,7 +136,8 @@ function mapReceiptFromDocumentAI(document) {
 
   const taxFromLines = parseTaxFromLines(lines);
   const taxFromRawText = parseTaxFromRawText(rawText);
-  const normalizedTax = tax || taxFromLines || taxFromRawText;
+  const taxFromTotals = deriveTaxFromTotals(totals);
+  const normalizedTax = tax || taxFromTotals || taxFromLines || taxFromRawText;
 
   const parseMode = `${layout.kind}->${bestCandidate.name}`;
 
@@ -159,9 +161,10 @@ function mapReceiptFromDocumentAI(document) {
       })),
       lineContent: lines.slice(0, 220),
       rawTextPreview: rawText.slice(0, 2400),
+      totals,
       taxSource: tax
         ? "entity"
-        : (taxFromLines ? "lines" : (taxFromRawText ? "raw_text" : "none")),
+        : (taxFromTotals ? "totals_diff" : (taxFromLines ? "lines" : (taxFromRawText ? "raw_text" : "none"))),
     },
   };
 }
@@ -605,3 +608,23 @@ function parseTotalsFromLines(lines) {
   }
   return { subtotal, total };
 }
+
+function deriveTaxFromTotals(totals) {
+  const subtotal = Number(totals?.subtotal || 0);
+  const total = Number(totals?.total || 0);
+  if (!(subtotal > 0 && total > 0 && total >= subtotal)) return "";
+  const diff = Number((total - subtotal).toFixed(2));
+  if (diff < 0) return "";
+  return normalizeAmount(diff.toFixed(2));
+}
+
+exports.__test__ = {
+  mapReceiptFromDocumentAI,
+  parseItemsFromLines,
+  parseItemsFromRawText,
+  parseTaxFromLines,
+  parseTotalsFromLines,
+  detectMerchantFromLines,
+  classifyReceiptLayout,
+  deriveTaxFromTotals,
+};

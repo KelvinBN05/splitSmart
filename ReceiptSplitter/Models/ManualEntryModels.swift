@@ -13,6 +13,7 @@ struct ManualEntryPrefill: Identifiable, Hashable {
     var tax: String
     var tip: String
     var items: [Item]
+    var sourceOCRJobID: String?
 }
 
 struct ManualEntryItemDraft: Identifiable {

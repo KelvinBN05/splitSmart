@@ -8,6 +8,7 @@ struct Receipt: Identifiable, Hashable, Codable {
     var items: [ReceiptItem]
     var tax: Decimal
     var tip: Decimal
+    var sourceOCRJobID: String?
 
     init(
         id: UUID = UUID(),
@@ -16,7 +17,8 @@ struct Receipt: Identifiable, Hashable, Codable {
         participants: [Participant],
         items: [ReceiptItem],
         tax: Decimal = 0,
-        tip: Decimal = 0
+        tip: Decimal = 0,
+        sourceOCRJobID: String? = nil
     ) {
         self.id = id
         self.merchantName = merchantName
@@ -25,6 +27,7 @@ struct Receipt: Identifiable, Hashable, Codable {
         self.items = items
         self.tax = tax
         self.tip = tip
+        self.sourceOCRJobID = sourceOCRJobID
     }
 
     var subtotal: Decimal {
