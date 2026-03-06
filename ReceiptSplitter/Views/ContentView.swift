@@ -62,7 +62,12 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                HistoryView(currentUserID: currentUser.id, currentUserEmail: currentUser.email ?? "unknown@example.com", receipts: receipts)
+                HistoryView(
+                    currentUserID: currentUser.id,
+                    currentUserEmail: currentUser.email ?? "unknown@example.com",
+                    receipts: receipts,
+                    friends: friends
+                )
             }
             .tabItem {
                 Label("History", systemImage: "clock")
@@ -1446,6 +1451,7 @@ private struct HistoryView: View {
     let currentUserID: String
     let currentUserEmail: String
     let receipts: [Receipt]
+    let friends: [AppFriend]
     private let splitSessionRepository = FirestoreSplitSessionRepository()
     @State private var creatingSessionReceiptID: UUID?
     @State private var sessionStatusMessage: String?
@@ -1453,6 +1459,8 @@ private struct HistoryView: View {
     @State private var joinCode: String = ""
     @State private var isJoinSheetPresented = false
     @State private var activeSessionRoute: SplitSessionRoute?
+    @State private var inviteFriendsReceipt: Receipt?
+    @State private var selectedFriendIDs: Set<String> = []
 
     var body: some View {
         historyContent
@@ -1478,6 +1486,9 @@ private struct HistoryView: View {
 #endif
         }
         .sheet(isPresented: $isJoinSheetPresented) { joinSessionSheet }
+        .sheet(item: $inviteFriendsReceipt) { receipt in
+            inviteFriendsSheet(for: receipt)
+        }
         .navigationDestination(item: $activeSessionRoute) { route in
             SplitSessionDetailView(
                 sessionID: route.id,
@@ -1587,6 +1598,17 @@ private struct HistoryView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(creatingSessionReceiptID != nil)
+
+                Button {
+                    selectedFriendIDs = []
+                    inviteFriendsReceipt = receipt
+                } label: {
+                    Label("Add Friends", systemImage: "person.crop.circle.badge.plus")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(creatingSessionReceiptID != nil || friends.isEmpty)
             }
         }
         .padding(16)
@@ -1599,16 +1621,82 @@ private struct HistoryView: View {
         .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
 
+    private func inviteFriendsSheet(for receipt: Receipt) -> some View {
+        NavigationStack {
+            List {
+                Section("Select Friends") {
+                    if friends.isEmpty {
+                        Text("No friends available. Add friends from Profile first.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(friends) { friend in
+                            Button {
+                                toggleFriendSelection(friend.id)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(friend.displayName)
+                                            .foregroundStyle(.primary)
+                                        Text(friend.email)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if selectedFriendIDs.contains(friend.id) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    } else {
+                                        Image(systemName: "circle")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add Friends")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { inviteFriendsReceipt = nil }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create Session") {
+                        let selectedFriends = friends.filter { selectedFriendIDs.contains($0.id) }
+                        inviteFriendsReceipt = nil
+                        Task { await createSplitSession(from: receipt, selectedFriends: selectedFriends) }
+                    }
+                    .disabled(creatingSessionReceiptID != nil)
+                }
+            }
+        }
+    }
+
     private func createSplitSession(from receipt: Receipt) async {
+        await createSplitSession(from: receipt, selectedFriends: [])
+    }
+
+    private func createSplitSession(from receipt: Receipt, selectedFriends: [AppFriend]) async {
         guard creatingSessionReceiptID == nil else { return }
         creatingSessionReceiptID = receipt.id
         defer { creatingSessionReceiptID = nil }
+
+        let initialMembers: [SplitSessionMember] = selectedFriends.map { friend in
+            SplitSessionMember(
+                id: friend.id,
+                displayName: friend.displayName,
+                role: "member",
+                status: "accepted"
+            )
+        }
 
         do {
             let createdSession = try await splitSessionRepository.createSession(
                 from: receipt,
                 ownerUserId: currentUserID,
-                ownerDisplayName: currentUserEmail
+                ownerDisplayName: currentUserEmail,
+                initialMembers: initialMembers
             )
             activeSessionRoute = SplitSessionRoute(id: createdSession.id)
         } catch {
@@ -1632,6 +1720,14 @@ private struct HistoryView: View {
             activeSessionRoute = SplitSessionRoute(id: session.id)
         } catch {
             sessionErrorMessage = "Join failed. \(error.localizedDescription)"
+        }
+    }
+
+    private func toggleFriendSelection(_ userID: String) {
+        if selectedFriendIDs.contains(userID) {
+            selectedFriendIDs.remove(userID)
+        } else {
+            selectedFriendIDs.insert(userID)
         }
     }
 }

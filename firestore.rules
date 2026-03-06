@@ -44,7 +44,8 @@ service cloud.firestore {
     }
 
     match /friendRequests/{requestId} {
-      allow read: if isSignedIn() && request.auth.uid in resource.data.members;
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
       allow create: if isSignedIn()
         && request.resource.data.senderId == request.auth.uid
         && request.resource.data.recipientId is string
@@ -54,7 +55,7 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.members
         && request.resource.data.recipientId in request.resource.data.members;
       allow update: if isSignedIn()
-        && request.auth.uid in resource.data.members
+        && (resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid)
         && request.resource.data.members == resource.data.members
         && request.resource.data.senderId == resource.data.senderId
         && request.resource.data.recipientId == resource.data.recipientId;

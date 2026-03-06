@@ -40,9 +40,22 @@ final class FirestoreSplitSessionRepository {
         self.db = db
     }
 
-    func createSession(from receipt: Receipt, ownerUserId: String, ownerDisplayName: String) async throws -> SplitSession {
+    func createSession(
+        from receipt: Receipt,
+        ownerUserId: String,
+        ownerDisplayName: String,
+        initialMembers: [SplitSessionMember] = []
+    ) async throws -> SplitSession {
         let sessionID = UUID().uuidString
         let sessionRef = db.collection("splitSessions").document(sessionID)
+        let ownerMember = SplitSessionMember(
+            id: ownerUserId,
+            displayName: ownerDisplayName,
+            role: "owner",
+            status: "accepted"
+        )
+        let extraMembers = initialMembers.filter { $0.id != ownerUserId }
+        let members = [ownerMember] + extraMembers
 
         let session = SplitSession(
             id: sessionID,
@@ -56,14 +69,7 @@ final class FirestoreSplitSessionRepository {
             inviteCode: nil,
             readyUserIds: [],
             finalizedAt: nil,
-            members: [
-                SplitSessionMember(
-                    id: ownerUserId,
-                    displayName: ownerDisplayName,
-                    role: "owner",
-                    status: "accepted"
-                )
-            ],
+            members: members,
             items: receipt.items.map { item in
                 SplitSessionItem(
                     id: item.id.uuidString,
@@ -96,6 +102,19 @@ final class FirestoreSplitSessionRepository {
             "status": session.status,
             "updatedAt": Timestamp(date: session.updatedAt)
         ], forDocument: ownerSessionRef, merge: true)
+        for member in extraMembers {
+            let memberSessionRef = db
+                .collection("users")
+                .document(member.id)
+                .collection("splitSessions")
+                .document(sessionID)
+            batch.setData([
+                "sessionId": sessionID,
+                "merchantName": session.merchantName,
+                "status": session.status,
+                "updatedAt": Timestamp(date: session.updatedAt)
+            ], forDocument: memberSessionRef, merge: true)
+        }
         try await batch.commit()
         return session
     }
