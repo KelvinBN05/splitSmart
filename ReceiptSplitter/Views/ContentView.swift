@@ -12,22 +12,39 @@ import AppKit
 #endif
 
 struct ContentView: View {
+    @EnvironmentObject private var sessionStore: SessionStore
+
     let currentUser: AppUser
     let receiptRepository: ReceiptRepository
+    let userProfileRepository: UserProfileRepository
 
     @State private var receipts: [Receipt] = []
     @State private var isLoadingReceipts = false
     @State private var loadErrorMessage: String?
+    @State private var isAccountSheetPresented = false
+    @State private var accountDisplayName = ""
+    @State private var isSavingDisplayName = false
 
-    init(currentUser: AppUser, receiptRepository: ReceiptRepository = FirestoreReceiptRepository()) {
+    init(
+        currentUser: AppUser,
+        receiptRepository: ReceiptRepository = FirestoreReceiptRepository(),
+        userProfileRepository: UserProfileRepository = FirestoreUserProfileRepository()
+    ) {
         self.currentUser = currentUser
         self.receiptRepository = receiptRepository
+        self.userProfileRepository = userProfileRepository
     }
 
     var body: some View {
         TabView {
             NavigationStack {
-                HomeView(currentUserID: currentUser.id, receipts: receipts) { newReceipt in
+                HomeView(
+                    currentUserID: currentUser.id,
+                    receipts: receipts,
+                    userInitials: userInitials
+                ) {
+                    isAccountSheetPresented = true
+                } onReceiptSaved: { newReceipt in
                     receipts.insert(newReceipt, at: 0)
                     Task {
                         do {
@@ -50,7 +67,11 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                ProfileView(participant: DemoData.profile)
+                AccountTabView(
+                    displayName: accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName,
+                    email: currentUser.email ?? "unknown@example.com",
+                    initials: userInitials
+                )
             }
             .tabItem {
                 Label("Profile", systemImage: "person")
@@ -59,6 +80,25 @@ struct ContentView: View {
         .tint(Color(red: 0.04, green: 0.45, blue: 0.95))
         .task {
             await loadReceipts()
+        }
+        .task {
+            await loadAccountProfile()
+        }
+        .sheet(isPresented: $isAccountSheetPresented) {
+            NavigationStack {
+                AccountProfileSheet(
+                    email: currentUser.email ?? "unknown@example.com",
+                    displayName: $accountDisplayName,
+                    isSaving: isSavingDisplayName,
+                    onSave: {
+                        Task { await saveDisplayName() }
+                    },
+                    onSignOut: {
+                        sessionStore.signOut()
+                        isAccountSheetPresented = false
+                    }
+                )
+            }
         }
         .alert("Sync Error", isPresented: Binding(
             get: { loadErrorMessage != nil },
@@ -87,6 +127,55 @@ struct ContentView: View {
         }
     }
 
+    private func loadAccountProfile() async {
+        do {
+            if let profile = try await userProfileRepository.fetchUserProfile(userID: currentUser.id),
+               !profile.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                accountDisplayName = profile.displayName
+            }
+        } catch {
+            // Non-blocking: profile data is optional for initial load.
+        }
+    }
+
+    private func saveDisplayName() async {
+        let trimmed = accountDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !isSavingDisplayName else { return }
+
+        isSavingDisplayName = true
+        defer { isSavingDisplayName = false }
+
+        do {
+            try await userProfileRepository.updateDisplayName(userID: currentUser.id, displayName: trimmed)
+            accountDisplayName = trimmed
+        } catch {
+            loadErrorMessage = "Failed to save display name."
+        }
+    }
+
+    private var userInitials: String {
+        let source = accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName
+        return initials(from: source)
+    }
+
+    private var defaultDisplayName: String {
+        guard let email = currentUser.email, !email.isEmpty else { return "User" }
+        return email.components(separatedBy: "@").first ?? "User"
+    }
+
+    private func initials(from text: String) -> String {
+        let parts = text
+            .split(separator: " ")
+            .map { String($0) }
+            .filter { !$0.isEmpty }
+
+        if parts.count >= 2 {
+            return String(parts[0].prefix(1) + parts[1].prefix(1)).uppercased()
+        }
+        return String(text.prefix(2)).uppercased()
+    }
+
     private func readableCloudErrorMessage(from error: Error) -> String {
         let nsError = error as NSError
         if nsError.domain == FirestoreErrorDomain {
@@ -109,6 +198,8 @@ struct ContentView: View {
 private struct HomeView: View {
     let currentUserID: String
     let receipts: [Receipt]
+    let userInitials: String
+    let onAccountTapped: () -> Void
     let onReceiptSaved: (Receipt) -> Void
 #if os(iOS)
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -164,11 +255,14 @@ private struct HomeView: View {
 
             Spacer()
 
-            Text(DemoData.profile.initials)
-                .font(.headline.weight(.bold))
-                .frame(width: 56, height: 56)
-                .background(Color.blue.opacity(0.15))
-                .clipShape(Circle())
+            Button(action: onAccountTapped) {
+                Text(userInitials)
+                    .font(.headline.weight(.bold))
+                    .frame(width: 56, height: 56)
+                    .background(Color.blue.opacity(0.15))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -1338,6 +1432,8 @@ private struct SplitSessionDetailView: View {
     @State private var inviteCodeError: String?
     @State private var inviteCodeStatus: String?
     @State private var actionError: String?
+    @State private var editingMemberID: String?
+    @State private var editingDisplayName: String = ""
 
     var body: some View {
         List {
@@ -1369,6 +1465,17 @@ private struct SplitSessionDetailView: View {
                                 Text(member.status)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                            }
+
+                            if canEditDisplayName(memberID: member.id, session: session) {
+                                Button {
+                                    editingMemberID = member.id
+                                    editingDisplayName = member.displayName
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .foregroundStyle(.blue)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -1469,6 +1576,32 @@ private struct SplitSessionDetailView: View {
             listener?.remove()
             listener = nil
         }
+        .sheet(isPresented: Binding(
+            get: { editingMemberID != nil },
+            set: { if !$0 { editingMemberID = nil } }
+        )) {
+            NavigationStack {
+                Form {
+                    Section("Display Name") {
+                        TextField("Name", text: $editingDisplayName)
+                    }
+                }
+                .navigationTitle("Edit Name")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            editingMemberID = nil
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            Task { await saveDisplayName() }
+                        }
+                        .disabled(editingDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }
         .alert("Invite", isPresented: Binding(get: { inviteCodeStatus != nil }, set: { if !$0 { inviteCodeStatus = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -1545,6 +1678,24 @@ private struct SplitSessionDetailView: View {
 #endif
         inviteCodeStatus = "Invite code copied."
     }
+
+    private func canEditDisplayName(memberID: String, session: SplitSession) -> Bool {
+        memberID == currentUserID || session.ownerUserId == currentUserID
+    }
+
+    private func saveDisplayName() async {
+        guard let memberID = editingMemberID else { return }
+        do {
+            try await repository.updateMemberDisplayName(
+                sessionID: sessionID,
+                memberID: memberID,
+                displayName: editingDisplayName
+            )
+            editingMemberID = nil
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
 }
 
 private struct EmptyActivityCard: View {
@@ -1568,24 +1719,63 @@ private struct EmptyActivityCard: View {
     }
 }
 
-private struct ProfileView: View {
-    let participant: Participant
-
+private struct AccountTabView: View {
+    let displayName: String
+    let email: String
+    let initials: String
     var body: some View {
         VStack(spacing: 16) {
-            Text(participant.initials)
+            Text(initials)
                 .font(.system(size: 40, weight: .bold))
                 .frame(width: 88, height: 88)
                 .background(Color.blue.opacity(0.16))
                 .clipShape(Circle())
-            Text(participant.name)
+            Text(displayName)
                 .font(.title2.weight(.bold))
-            Text("Split smarter with friends.")
+            Text(email)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColors.groupedBackground)
         .navigationTitle("Profile")
+    }
+}
+
+private struct AccountProfileSheet: View {
+    let email: String
+    @Binding var displayName: String
+    let isSaving: Bool
+    let onSave: () -> Void
+    let onSignOut: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Form {
+            Section("Account") {
+                LabeledContent("Email", value: email)
+                TextField("Display Name", text: $displayName)
+            }
+
+            Section {
+                Button(isSaving ? "Saving..." : "Save Profile") {
+                    onSave()
+                }
+                .disabled(isSaving || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            Section {
+                Button("Sign Out", role: .destructive) {
+                    onSignOut()
+                }
+            }
+        }
+        .navigationTitle("Account")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") { dismiss() }
+            }
+        }
     }
 }
 

@@ -220,6 +220,30 @@ final class FirestoreSplitSessionRepository {
         ])
     }
 
+    func updateMemberDisplayName(sessionID: String, memberID: String, displayName: String) async throws {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let sessionRef = db.collection("splitSessions").document(sessionID)
+        let snap = try await sessionRef.getDocument()
+        guard let data = snap.data() else { return }
+
+        var members = data["members"] as? [[String: Any]] ?? []
+        var changed = false
+        for index in members.indices {
+            guard let id = members[index]["id"] as? String, id == memberID else { continue }
+            members[index]["displayName"] = trimmed
+            changed = true
+            break
+        }
+        guard changed else { return }
+
+        try await sessionRef.setData([
+            "members": members,
+            "updatedAt": FieldValue.serverTimestamp()
+        ], merge: true)
+    }
+
     func finalizeSession(sessionID: String, ownerUserId: String) async throws {
         let sessionRef = db.collection("splitSessions").document(sessionID)
         let snap = try await sessionRef.getDocument()
