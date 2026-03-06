@@ -7,7 +7,6 @@ import FirebaseStorage
 import Vision
 import CoreImage
 import CoreImage.CIFilterBuiltins
-import VisionKit
 #elseif os(macOS)
 import AppKit
 #endif
@@ -247,7 +246,6 @@ private struct HomeView: View {
     let onReceiptSaved: (Receipt) -> Void
 #if os(iOS)
     @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var isDocumentScannerPresented = false
 #endif
     @State private var isProcessingPhoto = false
     @State private var photoProcessingError: String?
@@ -294,18 +292,6 @@ private struct HomeView: View {
                 parsedPrefill = approvedPrefill
             }
         }
-#if os(iOS)
-        .sheet(isPresented: $isDocumentScannerPresented) {
-            DocumentReceiptScannerView { scannedImage in
-                isDocumentScannerPresented = false
-                Task {
-                    await processCapturedImage(scannedImage)
-                }
-            } onCancel: {
-                isDocumentScannerPresented = false
-            }
-        }
-#endif
     }
 
     private var header: some View {
@@ -335,6 +321,18 @@ private struct HomeView: View {
     }
 
     private var scanCard: some View {
+#if os(iOS)
+        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+            scanCardBody
+        }
+        .buttonStyle(.plain)
+        .disabled(isProcessingPhoto || isBusy)
+#else
+        scanCardBody
+#endif
+    }
+
+    private var scanCardBody: some View {
         VStack(alignment: .leading, spacing: 22) {
             Image(systemName: "camera")
                 .font(.title3.weight(.bold))
@@ -377,28 +375,16 @@ private struct HomeView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isProcessingPhoto || isBusy)
-
-                Button {
-                    isDocumentScannerPresented = true
-                } label: {
-                    SmallActionCard(
-                        title: isBusy ? "Scanning..." : "Live Scan",
-                        systemImage: "doc.viewfinder"
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isProcessingPhoto || isBusy)
 #else
                 SmallActionCard(title: "Upload Photo", systemImage: "photo")
 #endif
+                NavigationLink {
+                    ManualEntryView(friendSuggestions: friendSuggestions, onReceiptSaved: onReceiptSaved)
+                } label: {
+                    SmallActionCard(title: "Manual Entry", systemImage: "plus")
+                }
+                .buttonStyle(.plain)
             }
-
-            NavigationLink {
-                ManualEntryView(friendSuggestions: friendSuggestions, onReceiptSaved: onReceiptSaved)
-            } label: {
-                SmallActionCard(title: "Manual Entry", systemImage: "plus")
-            }
-            .buttonStyle(.plain)
 
             if let photoProcessingError {
                 Text(photoProcessingError)
@@ -547,26 +533,6 @@ private struct HomeView: View {
         }
     }
 
-    private func processCapturedImage(_ image: UIImage) async {
-        guard !isProcessingPhoto else { return }
-        isProcessingPhoto = true
-        photoProcessingError = nil
-        scanFlowStage = .uploading
-        scanFlowDetail = "Preparing captured image."
-        defer { isProcessingPhoto = false }
-
-        do {
-            guard let imageData = image.jpegData(compressionQuality: 0.92) else {
-                throw NSError(domain: "Scan", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not encode captured image."])
-            }
-            try await processImageData(imageData)
-        } catch {
-            photoProcessingError = error.localizedDescription
-            scanFlowStage = .failed
-            scanFlowDetail = error.localizedDescription
-        }
-    }
-
     private func processImageData(_ imageData: Data) async throws {
         let prefill = try await DocumentAIOCRJobService.createAndAwaitOCRJob(
             imageData: imageData,
@@ -617,50 +583,6 @@ private struct HomeView: View {
 }
 
 #if os(iOS)
-private struct DocumentReceiptScannerView: UIViewControllerRepresentable {
-    let onCapture: (UIImage) -> Void
-    let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onCapture: onCapture, onCancel: onCancel)
-    }
-
-    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
-        let controller = VNDocumentCameraViewController()
-        controller.delegate = context.coordinator
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: VNDocumentCameraViewController, context: Context) {}
-
-    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
-        private let onCapture: (UIImage) -> Void
-        private let onCancel: () -> Void
-
-        init(onCapture: @escaping (UIImage) -> Void, onCancel: @escaping () -> Void) {
-            self.onCapture = onCapture
-            self.onCancel = onCancel
-        }
-
-        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
-            guard scan.pageCount > 0 else {
-                onCancel()
-                return
-            }
-            let image = scan.imageOfPage(at: 0)
-            onCapture(image)
-        }
-
-        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
-            onCancel()
-        }
-
-        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
-            onCancel()
-        }
-    }
-}
-
 private enum DocumentAIOCRJobService {
     private static let db = Firestore.firestore()
     private static let storage = Storage.storage()
