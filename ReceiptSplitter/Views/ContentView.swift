@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var isAccountSheetPresented = false
     @State private var accountDisplayName = ""
     @State private var isSavingDisplayName = false
+    @State private var friends: [AppFriend] = []
 
     init(
         currentUser: AppUser,
@@ -41,7 +42,8 @@ struct ContentView: View {
                 HomeView(
                     currentUserID: currentUser.id,
                     receipts: receipts,
-                    userInitials: userInitials
+                    userInitials: userInitials,
+                    friendSuggestions: friendDisplayNames
                 ) {
                     isAccountSheetPresented = true
                 } onReceiptSaved: { newReceipt in
@@ -68,9 +70,12 @@ struct ContentView: View {
 
             NavigationStack {
                 AccountTabView(
+                    currentUserID: currentUser.id,
+                    userProfileRepository: userProfileRepository,
                     displayName: accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName,
                     email: currentUser.email ?? "unknown@example.com",
-                    initials: userInitials
+                    initials: userInitials,
+                    friends: $friends
                 )
             }
             .tabItem {
@@ -83,6 +88,9 @@ struct ContentView: View {
         }
         .task {
             await loadAccountProfile()
+        }
+        .task {
+            await loadFriends()
         }
         .sheet(isPresented: $isAccountSheetPresented) {
             NavigationStack {
@@ -164,6 +172,12 @@ struct ContentView: View {
         return email.components(separatedBy: "@").first ?? "User"
     }
 
+    private var friendDisplayNames: [String] {
+        friends
+            .map { $0.displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ($0.email.components(separatedBy: "@").first ?? "Friend") : $0.displayName }
+            .sorted()
+    }
+
     private func initials(from text: String) -> String {
         let parts = text
             .split(separator: " ")
@@ -193,6 +207,14 @@ struct ContentView: View {
         }
         return "Cloud sync failed. Please try again."
     }
+
+    private func loadFriends() async {
+        do {
+            friends = try await userProfileRepository.fetchFriends(userID: currentUser.id)
+        } catch {
+            // Non-blocking: show app even if friends fetch fails.
+        }
+    }
 }
 
 private struct HomeView: View {
@@ -209,6 +231,7 @@ private struct HomeView: View {
     let currentUserID: String
     let receipts: [Receipt]
     let userInitials: String
+    let friendSuggestions: [String]
     let onAccountTapped: () -> Void
     let onReceiptSaved: (Receipt) -> Void
 #if os(iOS)
@@ -246,7 +269,7 @@ private struct HomeView: View {
         }
 #endif
         .navigationDestination(item: $parsedPrefill) { prefill in
-            ManualEntryView(prefill: prefill) { savedReceipt in
+            ManualEntryView(prefill: prefill, friendSuggestions: friendSuggestions) { savedReceipt in
                 scanFlowStage = .saved
                 scanFlowDetail = "Receipt saved to History."
                 onReceiptSaved(savedReceipt)
@@ -332,7 +355,7 @@ private struct HomeView: View {
 #endif
 
                 NavigationLink {
-                    ManualEntryView(onReceiptSaved: onReceiptSaved)
+                    ManualEntryView(friendSuggestions: friendSuggestions, onReceiptSaved: onReceiptSaved)
                 } label: {
                     SmallActionCard(title: "Manual Entry", systemImage: "plus")
                 }
@@ -1432,44 +1455,8 @@ private struct HistoryView: View {
     @State private var activeSessionRoute: SplitSessionRoute?
 
     var body: some View {
-        Group {
-            if receipts.isEmpty {
-                ContentUnavailableView(
-                    "No Receipts Yet",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text("Add a receipt from Home to see your history.")
-                )
-            } else {
-                List(receipts) { receipt in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(receipt.merchantName)
-                            Text(Formatters.numericDate.string(from: receipt.createdAt))
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 8) {
-                            Text(Formatters.currencyString(from: receipt.total))
-                                .fontWeight(.semibold)
-                            Button {
-                                Task { await createSplitSession(from: receipt) }
-                            } label: {
-                                if creatingSessionReceiptID == receipt.id {
-                                    ProgressView()
-                                } else {
-                                    Label("Create Session", systemImage: "person.2.badge.plus")
-                                        .font(.caption.weight(.semibold))
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(creatingSessionReceiptID != nil)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
+        historyContent
+        .background(AppColors.groupedBackground)
         .navigationTitle("History")
         .toolbar {
 #if os(iOS)
@@ -1490,28 +1477,7 @@ private struct HistoryView: View {
             }
 #endif
         }
-        .sheet(isPresented: $isJoinSheetPresented) {
-            NavigationStack {
-                Form {
-                    Section("Join by Invite Code") {
-                        TextField("Invite Code", text: $joinCode)
-#if os(iOS)
-                            .textInputAutocapitalization(.characters)
-#endif
-                        Button("Join Session") {
-                            Task { await joinSession() }
-                        }
-                        .disabled(joinCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creatingSessionReceiptID != nil)
-                    }
-                }
-                .navigationTitle("Join Session")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { isJoinSheetPresented = false }
-                    }
-                }
-            }
-        }
+        .sheet(isPresented: $isJoinSheetPresented) { joinSessionSheet }
         .navigationDestination(item: $activeSessionRoute) { route in
             SplitSessionDetailView(
                 sessionID: route.id,
@@ -1519,22 +1485,118 @@ private struct HistoryView: View {
                 currentUserEmail: currentUserEmail
             )
         }
-        .alert("Split Session", isPresented: Binding(
-            get: { sessionStatusMessage != nil },
-            set: { if !$0 { sessionStatusMessage = nil } }
-        )) {
+        .alert("Split Session", isPresented: statusAlertBinding) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(sessionStatusMessage ?? "")
         }
-        .alert("Session Error", isPresented: Binding(
-            get: { sessionErrorMessage != nil },
-            set: { if !$0 { sessionErrorMessage = nil } }
-        )) {
+        .alert("Session Error", isPresented: errorAlertBinding) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(sessionErrorMessage ?? "")
         }
+    }
+
+    @ViewBuilder
+    private var historyContent: some View {
+        if receipts.isEmpty {
+            ContentUnavailableView(
+                "No Receipts Yet",
+                systemImage: "doc.text.magnifyingglass",
+                description: Text("Add a receipt from Home to see your history.")
+            )
+        } else {
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach(receipts) { receipt in
+                        receiptCard(receipt)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+        }
+    }
+
+    private var joinSessionSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Join by Invite Code") {
+                    TextField("Invite Code", text: $joinCode)
+#if os(iOS)
+                        .textInputAutocapitalization(.characters)
+#endif
+                    Button("Join Session") {
+                        Task { await joinSession() }
+                    }
+                    .disabled(joinCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creatingSessionReceiptID != nil)
+                }
+            }
+            .navigationTitle("Join Session")
+            .presentationDetents([.medium])
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { isJoinSheetPresented = false }
+                }
+            }
+        }
+    }
+
+    private var statusAlertBinding: Binding<Bool> {
+        Binding(
+            get: { sessionStatusMessage != nil },
+            set: { if !$0 { sessionStatusMessage = nil } }
+        )
+    }
+
+    private var errorAlertBinding: Binding<Bool> {
+        Binding(
+            get: { sessionErrorMessage != nil },
+            set: { if !$0 { sessionErrorMessage = nil } }
+        )
+    }
+
+    private func receiptCard(_ receipt: Receipt) -> some View {
+        VStack(spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(receipt.merchantName)
+                        .font(.headline)
+                    Text(Formatters.numericDate.string(from: receipt.createdAt))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(Formatters.currencyString(from: receipt.total))
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await createSplitSession(from: receipt) }
+                } label: {
+                    if creatingSessionReceiptID == receipt.id {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Label("Create Session", systemImage: "person.2.badge.plus")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(creatingSessionReceiptID != nil)
+            }
+        }
+        .padding(16)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
 
     private func createSplitSession(from receipt: Receipt) async {
@@ -1877,24 +1939,200 @@ private struct EmptyActivityCard: View {
 }
 
 private struct AccountTabView: View {
+    let currentUserID: String
+    let userProfileRepository: UserProfileRepository
     let displayName: String
     let email: String
     let initials: String
+    @Binding var friends: [AppFriend]
+
+    @State private var friendEmailInput = ""
+    @State private var friendErrorMessage: String?
+    @State private var friendStatusMessage: String?
+    @State private var isMutatingFriends = false
+    @State private var isLoadingFriends = false
+
     var body: some View {
-        VStack(spacing: 16) {
-            Text(initials)
-                .font(.system(size: 40, weight: .bold))
-                .frame(width: 88, height: 88)
-                .background(Color.blue.opacity(0.16))
-                .clipShape(Circle())
-            Text(displayName)
-                .font(.title2.weight(.bold))
-            Text(email)
-                .foregroundStyle(.secondary)
+        ScrollView {
+            VStack(spacing: 20) {
+                VStack(spacing: 10) {
+                    Text(initials)
+                        .font(.system(size: 40, weight: .bold))
+                        .frame(width: 88, height: 88)
+                        .background(Color.blue.opacity(0.16))
+                        .clipShape(Circle())
+                    Text(displayName)
+                        .font(.title2.weight(.bold))
+                    Text(email)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 18)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Private receipts synced to your account", systemImage: "lock.shield")
+                    Label("Add friends once, then reuse them in manual split flows", systemImage: "person.2.badge.plus")
+                    Label("OCR review before saving to history", systemImage: "doc.text.magnifyingglass")
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Color.white)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                )
+
+                friendCard
+            }
+            .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColors.groupedBackground)
         .navigationTitle("Profile")
+        .task {
+            await reloadFriends()
+        }
+    }
+
+    private var friendCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Friends", systemImage: "person.3")
+                    .font(.headline)
+                Spacer()
+                if isLoadingFriends {
+                    ProgressView()
+                        .scaleEffect(0.85)
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField("Friend email", text: $friendEmailInput)
+#if os(iOS)
+                    .textInputAutocapitalization(.never)
+#endif
+                    .autocorrectionDisabled(true)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 10)
+                    .background(AppColors.secondaryBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                Button {
+                    Task { await addFriend() }
+                } label: {
+                    Text(isMutatingFriends ? "Adding..." : "Add")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.blue)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isMutatingFriends || friendEmailInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if let friendErrorMessage {
+                Text(friendErrorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            } else if let friendStatusMessage {
+                Text(friendStatusMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.green)
+            }
+
+            if friends.isEmpty {
+                Text("No friends added yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(friends) { friend in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(friend.displayName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                                Text(friend.email)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(role: .destructive) {
+                                Task { await removeFriend(friend) }
+                            } label: {
+                                Image(systemName: "person.fill.xmark")
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isMutatingFriends)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        )
+    }
+
+    private func reloadFriends() async {
+        guard !isLoadingFriends else { return }
+        isLoadingFriends = true
+        defer { isLoadingFriends = false }
+        do {
+            friends = try await userProfileRepository.fetchFriends(userID: currentUserID)
+        } catch {
+            friendErrorMessage = "Could not load friends."
+        }
+    }
+
+    private func addFriend() async {
+        guard !isMutatingFriends else { return }
+        isMutatingFriends = true
+        defer { isMutatingFriends = false }
+        friendErrorMessage = nil
+        friendStatusMessage = nil
+
+        do {
+            let created = try await userProfileRepository.addFriend(
+                currentUserID: currentUserID,
+                friendEmail: friendEmailInput
+            )
+            friendEmailInput = ""
+            if !friends.contains(where: { $0.id == created.id }) {
+                friends.append(created)
+                friends.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+            }
+            friendStatusMessage = "Friend added."
+        } catch {
+            friendErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeFriend(_ friend: AppFriend) async {
+        guard !isMutatingFriends else { return }
+        isMutatingFriends = true
+        defer { isMutatingFriends = false }
+        friendErrorMessage = nil
+        friendStatusMessage = nil
+
+        do {
+            try await userProfileRepository.removeFriend(currentUserID: currentUserID, friendUserID: friend.id)
+            friends.removeAll { $0.id == friend.id }
+            friendStatusMessage = "Friend removed."
+        } catch {
+            friendErrorMessage = "Failed to remove friend."
+        }
     }
 }
 
@@ -1912,6 +2150,9 @@ private struct AccountProfileSheet: View {
             Section("Account") {
                 LabeledContent("Email", value: email)
                 TextField("Display Name", text: $displayName)
+                Text("This name appears in split sessions.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             Section {
@@ -1928,6 +2169,7 @@ private struct AccountProfileSheet: View {
             }
         }
         .navigationTitle("Account")
+        .presentationDetents([.medium, .large])
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Close") { dismiss() }

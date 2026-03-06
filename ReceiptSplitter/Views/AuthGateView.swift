@@ -37,60 +37,88 @@ private struct AuthView: View {
     }
 
     var body: some View {
-        VStack(spacing: 18) {
-            Text("SplitSmart")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.92, green: 0.96, blue: 1.00),
+                    Color(red: 0.96, green: 0.98, blue: 1.00),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
 
-            Picker("Auth Mode", selection: $mode) {
-                ForEach(Mode.allCases) { item in
-                    Text(item.rawValue).tag(item)
+            VStack(spacing: 20) {
+                VStack(spacing: 8) {
+                    Text("SplitSmart")
+                        .font(.system(size: 42, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.06, green: 0.12, blue: 0.25))
+                    Text("Scan receipts, split totals, and track everything in one place.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: mode) {
-                sessionStore.authErrorMessage = nil
-            }
 
-            if mode == .signIn {
-                LoginView(
-                    email: $email,
-                    password: $password,
-                    isSubmitting: sessionStore.isAuthenticating,
-                    onSubmit: submit
+                VStack(spacing: 16) {
+                    Picker("Auth Mode", selection: $mode) {
+                        ForEach(Mode.allCases) { item in
+                            Text(item.rawValue).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: mode) {
+                        sessionStore.authErrorMessage = nil
+                    }
+
+                    if mode == .signIn {
+                        LoginView(
+                            email: $email,
+                            password: $password,
+                            isSubmitting: sessionStore.isAuthenticating,
+                            onSubmit: submit
+                        )
+                    } else {
+                        RegisterView(
+                            email: $email,
+                            password: $password,
+                            confirmPassword: $confirmPassword,
+                            isSubmitting: sessionStore.isAuthenticating,
+                            onSubmit: submit
+                        )
+                    }
+
+                    if let localValidationError {
+                        Text(localValidationError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    if let authError = sessionStore.authErrorMessage {
+                        Text(authError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    if sessionStore.isAuthenticating {
+                        ProgressView(mode == .signIn ? "Signing in..." : "Creating account...")
+                            .font(.footnote)
+                    }
+                }
+                .padding(22)
+                .background(.white.opacity(0.92))
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
                 )
-            } else {
-                RegisterView(
-                    email: $email,
-                    password: $password,
-                    confirmPassword: $confirmPassword,
-                    isSubmitting: sessionStore.isAuthenticating,
-                    onSubmit: submit
-                )
+                .shadow(color: .black.opacity(0.06), radius: 14, x: 0, y: 8)
             }
-
-            if let localValidationError {
-                Text(localValidationError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-            }
-
-            if let authError = sessionStore.authErrorMessage {
-                Text(authError)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-            }
-
-            if sessionStore.isAuthenticating {
-                ProgressView(mode == .signIn ? "Signing in..." : "Creating account...")
-                    .font(.footnote)
-            }
+            .padding(24)
         }
-        .padding(24)
         .frame(maxWidth: 420)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(authBackgroundColor)
     }
 
     private var normalizedEmail: String {
@@ -130,15 +158,5 @@ private struct AuthView: View {
                 await sessionStore.signUp(email: normalizedEmail, password: password)
             }
         }
-    }
-
-    private var authBackgroundColor: Color {
-#if os(iOS)
-        return Color(UIColor.systemGroupedBackground)
-#elseif os(macOS)
-        return Color(NSColor.windowBackgroundColor)
-#else
-        return Color(.systemGray6)
-#endif
     }
 }
