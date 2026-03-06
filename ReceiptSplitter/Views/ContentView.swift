@@ -29,6 +29,7 @@ struct ContentView: View {
     @State private var friends: [AppFriend] = []
     @State private var incomingReceiptInvites: [ReceiptInvite] = []
     @State private var isLoadingIncomingInvites = false
+    @State private var banner: AppBanner?
 
     init(
         currentUser: AppUser,
@@ -59,6 +60,7 @@ struct ContentView: View {
                         do {
                             try await receiptRepository.saveReceipt(normalized, ownerUserId: currentUser.id)
                             try await sendInvitesIfNeeded(for: normalized)
+                            showBanner(message: "Receipt saved to history.", style: .success)
                         } catch {
                             loadErrorMessage = "Saved locally, but failed to sync to cloud."
                         }
@@ -123,6 +125,10 @@ struct ContentView: View {
         .task {
             await loadIncomingReceiptInvites()
         }
+        .onChange(of: loadErrorMessage) { _, newValue in
+            guard let newValue, !newValue.isEmpty else { return }
+            showBanner(message: newValue, style: .error)
+        }
         .sheet(isPresented: $isAccountSheetPresented) {
             NavigationStack {
                 AccountProfileSheet(
@@ -139,19 +145,15 @@ struct ContentView: View {
                 )
             }
         }
-        .alert("Sync Error", isPresented: Binding(
-            get: { loadErrorMessage != nil },
-            set: { if !$0 { loadErrorMessage = nil } }
-        )) {
-            Button("Retry") {
-                Task {
-                    await loadReceipts()
-                }
+        .overlay(alignment: .top) {
+            if let banner {
+                AppBannerView(banner: banner)
+                    .padding(.top, 8)
+                    .padding(.horizontal, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(loadErrorMessage ?? "Unknown error")
         }
+        .animation(.easeInOut(duration: 0.22), value: banner)
     }
 
     private func loadReceipts() async {
@@ -171,6 +173,7 @@ struct ContentView: View {
         receipts.removeAll { $0.id == receipt.id }
         do {
             try await receiptRepository.deleteReceipt(receiptID: receipt.id, ownerUserId: currentUser.id)
+            showBanner(message: "Receipt deleted.", style: .success)
         } catch {
             receipts = backup
             loadErrorMessage = "Failed to delete receipt. \(readableCloudErrorMessage(from: error))"
@@ -189,6 +192,7 @@ struct ContentView: View {
         do {
             try await receiptRepository.saveReceipt(normalized, ownerUserId: currentUser.id)
             try await sendInvitesIfNeeded(for: normalized)
+            showBanner(message: "Split saved.", style: .success)
         } catch {
             loadErrorMessage = "Failed to save split changes. \(readableCloudErrorMessage(from: error))"
         }
@@ -252,6 +256,7 @@ struct ContentView: View {
             try await receiptInviteRepository.acceptInvite(inviteID: invite.id, currentUserId: currentUser.id)
             await loadIncomingReceiptInvites()
             await loadReceipts()
+            showBanner(message: "Invite accepted.", style: .success)
         } catch {
             loadErrorMessage = "Failed to accept invite. \(readableCloudErrorMessage(from: error))"
         }
@@ -261,6 +266,7 @@ struct ContentView: View {
         do {
             try await receiptInviteRepository.declineInvite(inviteID: invite.id, currentUserId: currentUser.id)
             await loadIncomingReceiptInvites()
+            showBanner(message: "Invite declined.", style: .info)
         } catch {
             loadErrorMessage = "Failed to decline invite. \(readableCloudErrorMessage(from: error))"
         }
@@ -288,6 +294,7 @@ struct ContentView: View {
         do {
             try await userProfileRepository.updateDisplayName(userID: currentUser.id, displayName: trimmed)
             accountDisplayName = trimmed
+            showBanner(message: "Profile updated.", style: .success)
         } catch {
             loadErrorMessage = "Failed to save display name."
         }
@@ -351,6 +358,17 @@ struct ContentView: View {
             // Non-blocking: show app even if friends fetch fails.
         }
     }
+
+    private func showBanner(message: String, style: AppBanner.Style) {
+        let newBanner = AppBanner(message: message, style: style)
+        banner = newBanner
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            if banner?.id == newBanner.id {
+                banner = nil
+            }
+        }
+    }
 }
 
 private struct HomeView: View {
@@ -386,7 +404,7 @@ private struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 22) {
                 header
                 scanCard
                 quickActions
@@ -507,7 +525,11 @@ private struct HomeView: View {
     }
 
     private var quickActions: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Quick Actions")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+
             HStack(spacing: 14) {
 #if os(iOS)
                 PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
@@ -528,6 +550,10 @@ private struct HomeView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            Text("Scan Status")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
 
             if let photoProcessingError {
                 Text(photoProcessingError)
@@ -725,9 +751,9 @@ private struct HomeView: View {
                     .font(.title.weight(.bold))
                     .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
                 Spacer()
-                Text("See All")
+                Text("\(receipts.count) total")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(.secondary)
             }
 
             if isLoadingReceipts {
@@ -1733,9 +1759,15 @@ private struct HistoryView: View {
             )
         } else {
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
                     if !incomingInvites.isEmpty {
                         inviteSection
+                    }
+                    if !receipts.isEmpty {
+                        Text("Your Receipts")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 2)
                     }
                     ForEach(receipts) { receipt in
                         receiptCard(receipt)
@@ -1774,6 +1806,12 @@ private struct HistoryView: View {
                 Text(Formatters.currencyString(from: invite.receipt.total))
                     .font(.title3.weight(.bold))
                     .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+            }
+
+            if let createdAt = invite.createdAt {
+                Text(Formatters.shortDate.string(from: createdAt))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 10) {
@@ -2389,8 +2427,11 @@ private struct AccountTabView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: 22) {
                 VStack(spacing: 10) {
+                    Text("Account")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     Text(initials)
                         .font(.system(size: 40, weight: .bold))
                         .frame(width: 88, height: 88)
@@ -2510,6 +2551,7 @@ private struct AccountTabView: View {
                         }
                     }
                 }
+                .padding(.top, 2)
             }
 
             if !outgoingRequests.isEmpty {
@@ -2540,6 +2582,7 @@ private struct AccountTabView: View {
                         }
                     }
                 }
+                .padding(.top, 2)
             }
 
             if friends.isEmpty {
@@ -2740,6 +2783,55 @@ private enum Formatters {
 
     static func currencyString(from amount: Decimal) -> String {
         currency.string(from: NSDecimalNumber(decimal: amount)) ?? "$0.00"
+    }
+}
+
+private struct AppBanner: Identifiable, Equatable {
+    enum Style: Equatable {
+        case success
+        case error
+        case info
+    }
+
+    let id = UUID()
+    let message: String
+    let style: Style
+}
+
+private struct AppBannerView: View {
+    let banner: AppBanner
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .font(.subheadline.weight(.semibold))
+            Text(banner.message)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+    }
+
+    private var iconName: String {
+        switch banner.style {
+        case .success: return "checkmark.circle.fill"
+        case .error: return "exclamationmark.triangle.fill"
+        case .info: return "info.circle.fill"
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch banner.style {
+        case .success: return Color(red: 0.08, green: 0.58, blue: 0.30)
+        case .error: return Color(red: 0.75, green: 0.16, blue: 0.16)
+        case .info: return Color(red: 0.10, green: 0.45, blue: 0.88)
+        }
     }
 }
 
