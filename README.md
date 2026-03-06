@@ -57,6 +57,19 @@ This project now uses a backend OCR job flow for receipt parsing:
 - Optional `Mark as discount` toggle to exclude lines before manual entry
 - Saved receipts include `sourceOCRJobID` for traceability/debugging
 
+## Collaboration Shell (Step 1 + 2)
+
+The app now supports creating a collaboration session from a saved receipt:
+
+- Firestore path: `users/{uid}/splitSessions/{sessionId}`
+- Session payload includes:
+  - owner identity
+  - source receipt id (+ optional OCR job id)
+  - members (starts with owner)
+  - receipt items mapped for assignment
+  - totals snapshot
+- In-app trigger: History tab -> `Create Session` button per receipt
+
 ### One-time setup
 
 1. Create a Document AI receipt processor in Google Cloud

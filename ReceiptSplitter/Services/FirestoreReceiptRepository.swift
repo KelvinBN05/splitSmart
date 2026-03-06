@@ -33,6 +33,61 @@ final class FirestoreReceiptRepository: ReceiptRepository {
     }
 }
 
+final class FirestoreSplitSessionRepository {
+    private let db: Firestore
+
+    init(db: Firestore = Firestore.firestore()) {
+        self.db = db
+    }
+
+    func createSession(from receipt: Receipt, ownerUserId: String, ownerDisplayName: String) async throws -> SplitSession {
+        let sessionID = UUID().uuidString
+        let sessionRef = db
+            .collection("users")
+            .document(ownerUserId)
+            .collection("splitSessions")
+            .document(sessionID)
+
+        let session = SplitSession(
+            id: sessionID,
+            ownerUserId: ownerUserId,
+            sourceReceiptId: receipt.id.uuidString,
+            sourceOCRJobID: receipt.sourceOCRJobID,
+            merchantName: receipt.merchantName,
+            createdAt: .now,
+            updatedAt: .now,
+            status: "draft",
+            members: [
+                SplitSessionMember(
+                    id: ownerUserId,
+                    displayName: ownerDisplayName,
+                    role: "owner",
+                    status: "accepted"
+                )
+            ],
+            items: receipt.items.map { item in
+                SplitSessionItem(
+                    id: item.id.uuidString,
+                    name: item.name,
+                    quantity: item.quantity,
+                    unitPrice: item.unitPrice,
+                    assignedUserIds: [ownerUserId]
+                )
+            },
+            totals: SplitSessionTotals(
+                subtotal: receipt.subtotal,
+                tax: receipt.tax,
+                tip: receipt.tip,
+                total: receipt.total
+            )
+        )
+
+        let data = FirestoreSplitSessionMapper.encodeSession(session)
+        try await sessionRef.setData(data, merge: true)
+        return session
+    }
+}
+
 enum FirestoreReceiptMapper {
     static func encodeReceipt(_ receipt: Receipt, ownerUserId: String) -> [String: Any] {
         var payload: [String: Any] = [
@@ -124,6 +179,52 @@ enum FirestoreReceiptMapper {
             tip: tip,
             sourceOCRJobID: data["sourceOCRJobID"] as? String
         )
+    }
+
+    private static func decimalString(_ value: Decimal) -> String {
+        NSDecimalNumber(decimal: value).stringValue
+    }
+}
+
+enum FirestoreSplitSessionMapper {
+    static func encodeSession(_ session: SplitSession) -> [String: Any] {
+        var payload: [String: Any] = [
+            "ownerUserId": session.ownerUserId,
+            "sourceReceiptId": session.sourceReceiptId,
+            "merchantName": session.merchantName,
+            "createdAt": Timestamp(date: session.createdAt),
+            "updatedAt": Timestamp(date: session.updatedAt),
+            "status": session.status,
+            "members": session.members.map { member in
+                [
+                    "id": member.id,
+                    "displayName": member.displayName,
+                    "role": member.role,
+                    "status": member.status
+                ]
+            },
+            "items": session.items.map { item in
+                [
+                    "id": item.id,
+                    "name": item.name,
+                    "quantity": item.quantity,
+                    "unitPrice": decimalString(item.unitPrice),
+                    "assignedUserIds": item.assignedUserIds
+                ]
+            },
+            "totals": [
+                "subtotal": decimalString(session.totals.subtotal),
+                "tax": decimalString(session.totals.tax),
+                "tip": decimalString(session.totals.tip),
+                "total": decimalString(session.totals.total)
+            ]
+        ]
+
+        if let sourceOCRJobID = session.sourceOCRJobID, !sourceOCRJobID.isEmpty {
+            payload["sourceOCRJobID"] = sourceOCRJobID
+        }
+
+        return payload
     }
 
     private static func decimalString(_ value: Decimal) -> String {

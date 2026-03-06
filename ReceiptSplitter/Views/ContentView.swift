@@ -43,7 +43,7 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                HistoryView(receipts: receipts)
+                HistoryView(currentUserID: currentUser.id, currentUserEmail: currentUser.email ?? "unknown@example.com", receipts: receipts)
             }
             .tabItem {
                 Label("History", systemImage: "clock")
@@ -1169,7 +1169,13 @@ private struct ActivityRow: View {
 }
 
 private struct HistoryView: View {
+    let currentUserID: String
+    let currentUserEmail: String
     let receipts: [Receipt]
+    private let splitSessionRepository = FirestoreSplitSessionRepository()
+    @State private var creatingSessionReceiptID: UUID?
+    @State private var sessionStatusMessage: String?
+    @State private var sessionErrorMessage: String?
 
     var body: some View {
         Group {
@@ -1189,14 +1195,61 @@ private struct HistoryView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(Formatters.currencyString(from: receipt.total))
-                            .fontWeight(.semibold)
+                        VStack(alignment: .trailing, spacing: 8) {
+                            Text(Formatters.currencyString(from: receipt.total))
+                                .fontWeight(.semibold)
+                            Button {
+                                Task { await createSplitSession(from: receipt) }
+                            } label: {
+                                if creatingSessionReceiptID == receipt.id {
+                                    ProgressView()
+                                } else {
+                                    Label("Create Session", systemImage: "person.2.badge.plus")
+                                        .font(.caption.weight(.semibold))
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(creatingSessionReceiptID != nil)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
             }
         }
         .navigationTitle("History")
+        .alert("Split Session", isPresented: Binding(
+            get: { sessionStatusMessage != nil },
+            set: { if !$0 { sessionStatusMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(sessionStatusMessage ?? "")
+        }
+        .alert("Session Error", isPresented: Binding(
+            get: { sessionErrorMessage != nil },
+            set: { if !$0 { sessionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(sessionErrorMessage ?? "")
+        }
+    }
+
+    private func createSplitSession(from receipt: Receipt) async {
+        guard creatingSessionReceiptID == nil else { return }
+        creatingSessionReceiptID = receipt.id
+        defer { creatingSessionReceiptID = nil }
+
+        do {
+            let createdSession = try await splitSessionRepository.createSession(
+                from: receipt,
+                ownerUserId: currentUserID,
+                ownerDisplayName: currentUserEmail
+            )
+            sessionStatusMessage = "Session created: \(createdSession.id)"
+        } catch {
+            sessionErrorMessage = "Failed to create session. \(error.localizedDescription)"
+        }
     }
 }
 

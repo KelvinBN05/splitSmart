@@ -17,6 +17,9 @@ service cloud.firestore {
       match /ocrJobs/{jobId} {
         allow read, write: if isOwner(userId);
       }
+      match /splitSessions/{sessionId} {
+        allow read, write: if isOwner(userId);
+      }
     }
   }
 }

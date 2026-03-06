@@ -39,6 +39,42 @@ struct Receipt: Identifiable, Hashable, Codable {
     }
 }
 
+struct SplitSession: Identifiable, Hashable, Codable {
+    let id: String
+    let ownerUserId: String
+    let sourceReceiptId: String
+    let sourceOCRJobID: String?
+    var merchantName: String
+    var createdAt: Date
+    var updatedAt: Date
+    var status: String
+    var members: [SplitSessionMember]
+    var items: [SplitSessionItem]
+    var totals: SplitSessionTotals
+}
+
+struct SplitSessionMember: Identifiable, Hashable, Codable {
+    let id: String
+    var displayName: String
+    var role: String
+    var status: String
+}
+
+struct SplitSessionItem: Identifiable, Hashable, Codable {
+    let id: String
+    var name: String
+    var quantity: Int
+    var unitPrice: Decimal
+    var assignedUserIds: [String]
+}
+
+struct SplitSessionTotals: Hashable, Codable {
+    var subtotal: Decimal
+    var tax: Decimal
+    var tip: Decimal
+    var total: Decimal
+}
+
 private extension Decimal {
     func roundedToCents() -> Decimal {
         var value = self
