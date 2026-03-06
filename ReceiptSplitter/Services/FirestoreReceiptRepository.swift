@@ -115,6 +115,7 @@ final class FirestoreReceiptInviteRepository {
 
                 var copied = receiptData
                 copied["ownerUserId"] = currentUserId
+                copied["canonicalOwnerUserId"] = receiptData["canonicalOwnerUserId"] ?? data["senderId"]
                 copied["createdAt"] = receiptData["createdAt"] ?? Timestamp(date: .now)
 
                 transaction.setData(copied, forDocument: userReceiptRef, merge: true)
@@ -435,6 +436,9 @@ enum FirestoreReceiptMapper {
         if let sourceOCRJobID = receipt.sourceOCRJobID, !sourceOCRJobID.isEmpty {
             payload["sourceOCRJobID"] = sourceOCRJobID
         }
+        if let canonicalOwnerUserId = receipt.canonicalOwnerUserId, !canonicalOwnerUserId.isEmpty {
+            payload["canonicalOwnerUserId"] = canonicalOwnerUserId
+        }
 
         return payload
     }
@@ -490,6 +494,7 @@ enum FirestoreReceiptMapper {
 
         return Receipt(
             id: UUID(uuidString: documentID) ?? UUID(),
+            canonicalOwnerUserId: data["canonicalOwnerUserId"] as? String,
             merchantName: merchantName,
             createdAt: createdAtTimestamp.dateValue(),
             participants: participants,
@@ -697,6 +702,7 @@ enum FirestoreReceiptInviteMapper {
 
         return Receipt(
             id: receiptID,
+            canonicalOwnerUserId: data["canonicalOwnerUserId"] as? String,
             merchantName: merchantName,
             createdAt: createdAtTimestamp.dateValue(),
             participants: participants,

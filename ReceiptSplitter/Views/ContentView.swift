@@ -202,6 +202,10 @@ struct ContentView: View {
         var normalized = receipt
         let ownerName = effectiveCurrentUserDisplayName
 
+        if normalized.canonicalOwnerUserId == nil || normalized.canonicalOwnerUserId?.isEmpty == true {
+            normalized.canonicalOwnerUserId = currentUser.id
+        }
+
         for index in normalized.participants.indices {
             let trimmed = normalized.participants[index].name.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty || trimmed.caseInsensitiveCompare("you") == .orderedSame {
@@ -213,6 +217,8 @@ struct ContentView: View {
     }
 
     private func sendInvitesIfNeeded(for receipt: Receipt) async throws {
+        guard receipt.canonicalOwnerUserId == currentUser.id else { return }
+
         let recipients = matchingFriends(from: receipt)
         guard !recipients.isEmpty else { return }
 

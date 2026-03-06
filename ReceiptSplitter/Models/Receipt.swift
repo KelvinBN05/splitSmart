@@ -2,6 +2,7 @@ import Foundation
 
 struct Receipt: Identifiable, Hashable, Codable {
     let id: UUID
+    var canonicalOwnerUserId: String?
     var merchantName: String
     var createdAt: Date
     var participants: [Participant]
@@ -12,6 +13,7 @@ struct Receipt: Identifiable, Hashable, Codable {
 
     init(
         id: UUID = UUID(),
+        canonicalOwnerUserId: String? = nil,
         merchantName: String,
         createdAt: Date = .now,
         participants: [Participant],
@@ -21,6 +23,7 @@ struct Receipt: Identifiable, Hashable, Codable {
         sourceOCRJobID: String? = nil
     ) {
         self.id = id
+        self.canonicalOwnerUserId = canonicalOwnerUserId
         self.merchantName = merchantName
         self.createdAt = createdAt
         self.participants = participants
