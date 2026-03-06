@@ -1,102 +1,119 @@
 # SplitSmart
 
-SplitSmart is an iOS app for scanning and splitting receipts across friends. This repo currently includes a polished SwiftUI home experience, a split calculation engine, and unit tests for money allocation.
+SplitSmart is an iOS receipt-splitting app built with SwiftUI + Firebase.
 
-## Current Features (Phase 1)
+Users can:
+- scan or upload receipts,
+- review and correct OCR output,
+- split items across multiple people,
+- share receipts with friends,
+- accept invites directly from History.
 
-- Home dashboard modeled after modern finance/productivity apps
-- Receipt domain models (`Receipt`, `ReceiptItem`, `Participant`)
-- Split calculator for:
-  - item ownership allocation
-  - proportional tax distribution
-  - proportional tip distribution
-  - cent-level rounding safety
-- Unit tests for split behavior and total validation
+## Screenshots
 
-## Project Structure
+| Home | Icon |
+| --- | --- |
+| ![Home](docs/screenshots/home.png) | ![App Icon](ReceiptSplitter/Assets.xcassets/AppIcon.appiconset/receiptsplit.png) |
 
-- `ReceiptSplitter/ContentView.swift`: main tabs + home/history/profile UI
-- `ReceiptSplitter/Models/`: core data models for receipt splitting
-- `ReceiptSplitter/Services/SplitCalculator.swift`: split engine and allocation rules
-- `ReceiptSplitterTests/SplitCalculatorTests.swift`: unit tests for split math
+## Core Features
 
-## Next Milestones
+- Firebase email/password authentication
+- Profile and friend system (send/approve requests)
+- OCR pipeline:
+  - iOS uploads receipt image to Firebase Storage
+  - Firestore OCR job document created per upload
+  - Cloud Function processes OCR and writes parsed result
+  - In-app OCR review before final save
+- Manual receipt editing and split adjustments
+- Multi-assignee item splitting (one item can be shared by multiple people)
+- Receipt sharing via History invites (accept/decline)
+- Per-user private receipt history with delete support
 
-1. OCR scanning flow (VisionKit + text parsing)
-2. Manual correction screen for OCR mistakes
-3. Save/load receipts with persistence
-4. Export/share split summary
+## Tech Stack
 
-## Run
+- SwiftUI (iOS app)
+- Firebase Auth
+- Cloud Firestore
+- Firebase Storage
+- Firebase Cloud Functions (Node.js)
+- Google Cloud Document AI (OCR backend)
 
-1. Open `ReceiptSplitter.xcodeproj` in Xcode
-2. Select an iOS Simulator
-3. Build and run (`Cmd + R`)
+## Architecture Snapshot
 
-## Test
+- `ReceiptSplitter/Views/ContentView.swift`
+  - Home, History, Profile flows
+  - OCR review, split overview, invite actions
+- `ReceiptSplitter/Models/`
+  - Receipt, items, participants, session models
+- `ReceiptSplitter/Services/`
+  - Firestore repositories
+  - Split calculation engine
+- `functions/`
+  - OCR processing function and parser logic
+- `firestore.rules`, `storage.rules`
+  - backend access controls
 
-Run tests in Xcode (`Cmd + U`) or with:
+## Local Run
 
-```bash
-xcodebuild test -project ReceiptSplitter.xcodeproj -scheme ReceiptSplitter -destination 'platform=iOS Simulator,name=iPhone 16'
-```
+1. Open `ReceiptSplitter.xcodeproj` in Xcode.
+2. Select iOS Simulator.
+3. Build and run (`Cmd + R`).
 
-## Backend OCR (Document AI)
+## Backend Setup
 
-This project now uses a backend OCR job flow for receipt parsing:
+### 1) Firebase
 
-1. iOS uploads image to Storage under `users/{uid}/ocrUploads/{jobId}.jpg`
-2. iOS creates Firestore doc `users/{uid}/ocrJobs/{jobId}`
-3. Cloud Function `processOCRJob` calls Document AI and writes parsed fields to `result`
-4. iOS polls job status, opens a Review OCR screen, then opens Manual Entry with prefilled fields
+- Create Firebase project
+- Enable Authentication (Email/Password)
+- Add iOS app and place `GoogleService-Info.plist` in `ReceiptSplitter/`
+- Enable Firestore + Storage
 
-### OCR review behavior
-
-- Edit OCR item `name`, `qty`, `price` inline
-- Quick delete rows
-- Optional `Mark as discount` toggle to exclude lines before manual entry
-- Saved receipts include `sourceOCRJobID` for traceability/debugging
-
-## Collaboration Shell (Step 1 + 2)
-
-The app now supports creating a collaboration session from a saved receipt:
-
-- Firestore path: `users/{uid}/splitSessions/{sessionId}`
-- Session payload includes:
-  - owner identity
-  - source receipt id (+ optional OCR job id)
-  - members (starts with owner)
-  - receipt items mapped for assignment
-  - totals snapshot
-- In-app trigger: History tab -> `Create Session` button per receipt
-
-### One-time setup
-
-1. Create a Document AI receipt processor in Google Cloud
-2. Note:
-   - `DOCUMENT_AI_PROJECT_ID`
-   - `DOCUMENT_AI_LOCATION` (e.g. `us`)
-   - `DOCUMENT_AI_PROCESSOR_ID`
-
-### Deploy
+### 2) Functions + Rules Deploy
 
 ```bash
 cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart/functions"
 npm install
 
 cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart"
+firebase deploy --only firestore:rules,storage,functions --project recieptsplitter
+```
+
+### 3) Document AI config
+
+Set function config (values from your GCP processor):
+
+```bash
 firebase functions:config:set \
   document_ai.project_id="recieptsplitter" \
   document_ai.location="us" \
   document_ai.processor_id="YOUR_PROCESSOR_ID"
-
-cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart"
-firebase deploy --only firestore:rules,storage,functions --project recieptsplitter
 ```
 
-### Parser regression tests
+Then redeploy functions.
+
+## Testing
+
+### iOS tests
 
 ```bash
-cd "/Users/kelvinnguyen/Documents/Projects/Receipt App/splitSmart/functions"
+xcodebuild test -project ReceiptSplitter.xcodeproj -scheme ReceiptSplitter -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max'
+```
+
+### Functions/parser tests
+
+```bash
+cd functions
 npm test
 ```
+
+## Resume Highlights
+
+This project demonstrates:
+- end-to-end product development (UI, backend, cloud OCR, data model)
+- real-time collaboration mechanics (friends + receipt invites)
+- robust split math with edge-case handling
+- Firebase security rules + production-style app data flows
+
+## Current Status
+
+Actively developed. Current focus is final UI polish, parser quality improvements, and broader automated test coverage for OCR edge cases.
