@@ -106,13 +106,6 @@ cd functions
 npm test
 ```
 
-## Resume Highlights
-
-This project demonstrates:
-- end-to-end product development (UI, backend, cloud OCR, data model)
-- real-time collaboration mechanics (friends + receipt invites)
-- robust split math with edge-case handling
-- Firebase security rules + production-style app data flows
 
 ## Current Status
 
