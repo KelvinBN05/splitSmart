@@ -61,5 +61,19 @@ service cloud.firestore {
         && request.resource.data.recipientId == resource.data.recipientId;
       allow delete: if false;
     }
+
+    match /receiptInvites/{inviteId} {
+      allow get, list: if isSignedIn()
+        && (resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid);
+      allow create: if isSignedIn()
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.recipientId is string
+        && request.resource.data.senderId != request.resource.data.recipientId;
+      allow update: if isSignedIn()
+        && (resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid)
+        && request.resource.data.senderId == resource.data.senderId
+        && request.resource.data.recipientId == resource.data.recipientId;
+      allow delete: if false;
+    }
   }
 }

@@ -78,6 +78,19 @@ struct SplitSessionTotals: Hashable, Codable {
     var total: Decimal
 }
 
+struct ReceiptInvite: Identifiable, Hashable {
+    let id: String
+    let senderId: String
+    let senderDisplayName: String
+    let senderEmail: String
+    let recipientId: String
+    let recipientEmail: String
+    let status: String
+    let receipt: Receipt
+    let createdAt: Date?
+    let updatedAt: Date?
+}
+
 enum SplitSessionAccess {
     static func canRead(_ session: SplitSession, userId: String) -> Bool {
         session.ownerUserId == userId || session.members.contains(where: { $0.id == userId })

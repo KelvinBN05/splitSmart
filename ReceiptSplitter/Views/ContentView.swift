@@ -68,9 +68,16 @@ struct ContentView: View {
                 HistoryView(
                     currentUserID: currentUser.id,
                     currentUserEmail: currentUser.email ?? "unknown@example.com",
+                    currentUserDisplayName: accountDisplayName.isEmpty ? defaultDisplayName : accountDisplayName,
                     receipts: receipts,
                     friends: friends,
-                    isLoadingReceipts: isLoadingReceipts
+                    isLoadingReceipts: isLoadingReceipts,
+                    onDeleteReceipt: { receipt in
+                        await deleteReceipt(receipt)
+                    },
+                    onRefreshReceipts: {
+                        await loadReceipts()
+                    }
                 )
             }
             .tabItem {
@@ -141,6 +148,17 @@ struct ContentView: View {
             receipts = try await receiptRepository.fetchReceipts(ownerUserId: currentUser.id)
         } catch {
             loadErrorMessage = readableCloudErrorMessage(from: error)
+        }
+    }
+
+    private func deleteReceipt(_ receipt: Receipt) async {
+        let backup = receipts
+        receipts.removeAll { $0.id == receipt.id }
+        do {
+            try await receiptRepository.deleteReceipt(receiptID: receipt.id, ownerUserId: currentUser.id)
+        } catch {
+            receipts = backup
+            loadErrorMessage = "Failed to delete receipt. \(readableCloudErrorMessage(from: error))"
         }
     }
 
@@ -1546,62 +1564,64 @@ private struct ActivityRow: View {
 private struct HistoryView: View {
     let currentUserID: String
     let currentUserEmail: String
+    let currentUserDisplayName: String
     let receipts: [Receipt]
     let friends: [AppFriend]
     let isLoadingReceipts: Bool
-    private let splitSessionRepository = FirestoreSplitSessionRepository()
-    @State private var creatingSessionReceiptID: UUID?
-    @State private var sessionStatusMessage: String?
-    @State private var sessionErrorMessage: String?
-    @State private var joinCode: String = ""
-    @State private var isJoinSheetPresented = false
-    @State private var activeSessionRoute: SplitSessionRoute?
+    let onDeleteReceipt: (Receipt) async -> Void
+    let onRefreshReceipts: () async -> Void
+
+    private let inviteRepository = FirestoreReceiptInviteRepository()
     @State private var inviteFriendsReceipt: Receipt?
     @State private var selectedFriendIDs: Set<String> = []
+    @State private var incomingInvites: [ReceiptInvite] = []
+    @State private var isLoadingInvites = false
+    @State private var mutatingInviteID: String?
+    @State private var isSendingInvites = false
+    @State private var deleteCandidate: Receipt?
+    @State private var inviteStatusMessage: String?
+    @State private var inviteErrorMessage: String?
 
     var body: some View {
         historyContent
         .background(AppColors.groupedBackground)
         .navigationTitle("History")
-        .toolbar {
-#if os(iOS)
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    isJoinSheetPresented = true
-                } label: {
-                    Label("Join Session", systemImage: "link.badge.plus")
-                }
-            }
-#else
-            ToolbarItem {
-                Button {
-                    isJoinSheetPresented = true
-                } label: {
-                    Label("Join Session", systemImage: "link.badge.plus")
-                }
-            }
-#endif
-        }
-        .sheet(isPresented: $isJoinSheetPresented) { joinSessionSheet }
         .sheet(item: $inviteFriendsReceipt) { receipt in
             inviteFriendsSheet(for: receipt)
         }
-        .navigationDestination(item: $activeSessionRoute) { route in
-            SplitSessionDetailView(
-                sessionID: route.id,
-                currentUserID: currentUserID,
-                currentUserEmail: currentUserEmail
-            )
+        .task {
+            await loadIncomingInvites()
         }
-        .alert("Split Session", isPresented: statusAlertBinding) {
+        .alert("Update", isPresented: Binding(
+            get: { inviteStatusMessage != nil },
+            set: { if !$0 { inviteStatusMessage = nil } }
+        )) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(sessionStatusMessage ?? "")
+            Text(inviteStatusMessage ?? "")
         }
-        .alert("Session Error", isPresented: errorAlertBinding) {
+        .alert("Error", isPresented: Binding(
+            get: { inviteErrorMessage != nil },
+            set: { if !$0 { inviteErrorMessage = nil } }
+        )) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(sessionErrorMessage ?? "")
+            Text(inviteErrorMessage ?? "")
+        }
+        .alert("Delete Receipt?", isPresented: Binding(
+            get: { deleteCandidate != nil },
+            set: { if !$0 { deleteCandidate = nil } }
+        )) {
+            Button("Delete", role: .destructive) {
+                guard let receipt = deleteCandidate else { return }
+                deleteCandidate = nil
+                Task { await onDeleteReceipt(receipt) }
+            }
+            Button("Cancel", role: .cancel) {
+                deleteCandidate = nil
+            }
+        } message: {
+            Text("This receipt will be removed from your history.")
         }
     }
 
@@ -1623,6 +1643,7 @@ private struct HistoryView: View {
         } else {
             ScrollView {
                 VStack(spacing: 12) {
+                    incomingInvitesSection
                     ForEach(receipts) { receipt in
                         receiptCard(receipt)
                     }
@@ -1633,42 +1654,29 @@ private struct HistoryView: View {
         }
     }
 
-    private var joinSessionSheet: some View {
-        NavigationStack {
-            Form {
-                Section("Join by Invite Code") {
-                    TextField("Invite Code", text: $joinCode)
-#if os(iOS)
-                        .textInputAutocapitalization(.characters)
-#endif
-                    Button("Join Session") {
-                        Task { await joinSession() }
-                    }
-                    .disabled(joinCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creatingSessionReceiptID != nil)
+    @ViewBuilder
+    private var incomingInvitesSection: some View {
+        if isLoadingInvites {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Loading invites...")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
+        } else if !incomingInvites.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Receipt Invites")
+                    .font(.headline)
+                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                ForEach(incomingInvites) { invite in
+                    inviteCard(invite)
                 }
             }
-            .navigationTitle("Join Session")
-            .presentationDetents([.medium])
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { isJoinSheetPresented = false }
-                }
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, 4)
         }
-    }
-
-    private var statusAlertBinding: Binding<Bool> {
-        Binding(
-            get: { sessionStatusMessage != nil },
-            set: { if !$0 { sessionStatusMessage = nil } }
-        )
-    }
-
-    private var errorAlertBinding: Binding<Bool> {
-        Binding(
-            get: { sessionErrorMessage != nil },
-            set: { if !$0 { sessionErrorMessage = nil } }
-        )
     }
 
     private func receiptCard(_ receipt: Receipt) -> some View {
@@ -1689,21 +1697,6 @@ private struct HistoryView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    Task { await createSplitSession(from: receipt) }
-                } label: {
-                    if creatingSessionReceiptID == receipt.id {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Label("Create Session", systemImage: "person.2.badge.plus")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(creatingSessionReceiptID != nil)
-
-                Button {
                     selectedFriendIDs = []
                     inviteFriendsReceipt = receipt
                 } label: {
@@ -1712,7 +1705,16 @@ private struct HistoryView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                .disabled(creatingSessionReceiptID != nil || friends.isEmpty)
+                .disabled(isSendingInvites || friends.isEmpty)
+
+                Button(role: .destructive) {
+                    deleteCandidate = receipt
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
         }
         .padding(16)
@@ -1766,64 +1768,108 @@ private struct HistoryView: View {
                     Button("Cancel") { inviteFriendsReceipt = nil }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create Session") {
+                    Button("Send Invites") {
                         let selectedFriends = friends.filter { selectedFriendIDs.contains($0.id) }
                         inviteFriendsReceipt = nil
-                        Task { await createSplitSession(from: receipt, selectedFriends: selectedFriends) }
+                        Task { await sendReceiptInvites(from: receipt, selectedFriends: selectedFriends) }
                     }
-                    .disabled(creatingSessionReceiptID != nil)
+                    .disabled(isSendingInvites || selectedFriendIDs.isEmpty)
                 }
             }
         }
     }
 
-    private func createSplitSession(from receipt: Receipt) async {
-        await createSplitSession(from: receipt, selectedFriends: [])
+    private func inviteCard(_ invite: ReceiptInvite) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(invite.receipt.merchantName)
+                        .font(.headline)
+                    Text("From \(invite.senderDisplayName)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(Formatters.currencyString(from: invite.receipt.total))
+                    .font(.headline.weight(.semibold))
+            }
+            HStack(spacing: 10) {
+                Button("Accept") {
+                    Task { await acceptInvite(invite.id) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(mutatingInviteID != nil)
+
+                Button("Decline", role: .destructive) {
+                    Task { await declineInvite(invite.id) }
+                }
+                .buttonStyle(.bordered)
+                .disabled(mutatingInviteID != nil)
+            }
+        }
+        .padding(14)
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.black.opacity(0.05), lineWidth: 1)
+        )
     }
 
-    private func createSplitSession(from receipt: Receipt, selectedFriends: [AppFriend]) async {
-        guard creatingSessionReceiptID == nil else { return }
-        creatingSessionReceiptID = receipt.id
-        defer { creatingSessionReceiptID = nil }
-
-        let initialMembers: [SplitSessionMember] = selectedFriends.map { friend in
-            SplitSessionMember(
-                id: friend.id,
-                displayName: friend.displayName,
-                role: "member",
-                status: "accepted"
-            )
-        }
-
+    private func loadIncomingInvites() async {
+        guard !isLoadingInvites else { return }
+        isLoadingInvites = true
+        defer { isLoadingInvites = false }
         do {
-            let createdSession = try await splitSessionRepository.createSession(
-                from: receipt,
+            incomingInvites = try await inviteRepository.fetchIncomingInvites(userId: currentUserID)
+        } catch {
+            inviteErrorMessage = "Failed to load receipt invites. \(error.localizedDescription)"
+        }
+    }
+
+    private func sendReceiptInvites(from receipt: Receipt, selectedFriends: [AppFriend]) async {
+        guard !selectedFriends.isEmpty else { return }
+        guard !isSendingInvites else { return }
+        isSendingInvites = true
+        defer { isSendingInvites = false }
+        do {
+            try await inviteRepository.sendInvites(
+                receipt: receipt,
                 ownerUserId: currentUserID,
-                ownerDisplayName: currentUserEmail,
-                initialMembers: initialMembers
+                ownerDisplayName: currentUserDisplayName,
+                ownerEmail: currentUserEmail,
+                recipients: selectedFriends
             )
-            activeSessionRoute = SplitSessionRoute(id: createdSession.id)
+            inviteStatusMessage = "Invite sent to \(selectedFriends.count) friend\(selectedFriends.count == 1 ? "" : "s")."
         } catch {
-            sessionErrorMessage = "Failed to create session. \(error.localizedDescription)"
+            inviteErrorMessage = "Failed to send invite. \(error.localizedDescription)"
         }
     }
 
-    private func joinSession() async {
-        guard creatingSessionReceiptID == nil else { return }
-        creatingSessionReceiptID = UUID()
-        defer { creatingSessionReceiptID = nil }
-
+    private func acceptInvite(_ inviteID: String) async {
+        guard mutatingInviteID == nil else { return }
+        mutatingInviteID = inviteID
+        defer { mutatingInviteID = nil }
         do {
-            let session = try await splitSessionRepository.joinSession(
-                inviteCode: joinCode,
-                userId: currentUserID,
-                userDisplayName: currentUserEmail
-            )
-            joinCode = ""
-            isJoinSheetPresented = false
-            activeSessionRoute = SplitSessionRoute(id: session.id)
+            try await inviteRepository.acceptInvite(inviteID: inviteID, currentUserId: currentUserID)
+            await loadIncomingInvites()
+            await onRefreshReceipts()
+            inviteStatusMessage = "Receipt invite accepted."
         } catch {
-            sessionErrorMessage = "Join failed. \(error.localizedDescription)"
+            inviteErrorMessage = "Failed to accept invite. \(error.localizedDescription)"
+        }
+    }
+
+    private func declineInvite(_ inviteID: String) async {
+        guard mutatingInviteID == nil else { return }
+        mutatingInviteID = inviteID
+        defer { mutatingInviteID = nil }
+        do {
+            try await inviteRepository.declineInvite(inviteID: inviteID, currentUserId: currentUserID)
+            await loadIncomingInvites()
+            inviteStatusMessage = "Receipt invite declined."
+        } catch {
+            inviteErrorMessage = "Failed to decline invite. \(error.localizedDescription)"
         }
     }
 
@@ -1834,10 +1880,6 @@ private struct HistoryView: View {
             selectedFriendIDs.insert(userID)
         }
     }
-}
-
-private struct SplitSessionRoute: Identifiable, Hashable {
-    let id: String
 }
 
 private struct SplitSessionDetailView: View {

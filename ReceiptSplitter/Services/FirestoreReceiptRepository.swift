@@ -31,6 +31,119 @@ final class FirestoreReceiptRepository: ReceiptRepository {
             .document(receipt.id.uuidString)
             .setData(data, merge: true)
     }
+
+    func deleteReceipt(receiptID: UUID, ownerUserId: String) async throws {
+        try await db
+            .collection("users")
+            .document(ownerUserId)
+            .collection("receipts")
+            .document(receiptID.uuidString)
+            .delete()
+    }
+}
+
+final class FirestoreReceiptInviteRepository {
+    private let db: Firestore
+
+    init(db: Firestore = Firestore.firestore()) {
+        self.db = db
+    }
+
+    func sendInvites(
+        receipt: Receipt,
+        ownerUserId: String,
+        ownerDisplayName: String,
+        ownerEmail: String,
+        recipients: [AppFriend]
+    ) async throws {
+        guard !recipients.isEmpty else { return }
+
+        let receiptPayload = FirestoreReceiptMapper.encodeReceipt(receipt, ownerUserId: ownerUserId)
+        let senderName = ownerDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? ownerEmail
+            : ownerDisplayName
+
+        let batch = db.batch()
+        for recipient in recipients {
+            let inviteID = UUID().uuidString
+            let ref = db.collection("receiptInvites").document(inviteID)
+            batch.setData([
+                "senderId": ownerUserId,
+                "senderDisplayName": senderName,
+                "senderEmail": ownerEmail,
+                "recipientId": recipient.id,
+                "recipientEmail": recipient.email,
+                "status": "pending",
+                "receipt": receiptPayload,
+                "createdAt": FieldValue.serverTimestamp(),
+                "updatedAt": FieldValue.serverTimestamp()
+            ], forDocument: ref, merge: true)
+        }
+        try await batch.commit()
+    }
+
+    func fetchIncomingInvites(userId: String) async throws -> [ReceiptInvite] {
+        let snapshot = try await db
+            .collection("receiptInvites")
+            .whereField("recipientId", isEqualTo: userId)
+            .whereField("status", isEqualTo: "pending")
+            .getDocuments()
+
+        return snapshot.documents.compactMap { doc in
+            FirestoreReceiptInviteMapper.decodeInvite(documentID: doc.documentID, data: doc.data())
+        }
+        .sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+    }
+
+    func acceptInvite(inviteID: String, currentUserId: String) async throws {
+        let inviteRef = db.collection("receiptInvites").document(inviteID)
+        let userReceiptRef = db.collection("users").document(currentUserId).collection("receipts").document(UUID().uuidString)
+
+        _ = try await db.runTransaction { transaction, errorPointer in
+            do {
+                let inviteSnap = try transaction.getDocument(inviteRef)
+                guard let data = inviteSnap.data() else { return nil }
+                guard (data["recipientId"] as? String) == currentUserId else {
+                    throw NSError(domain: "ReceiptInvite", code: 1, userInfo: [NSLocalizedDescriptionKey: "You cannot accept this invite."])
+                }
+                guard (data["status"] as? String) == "pending" else { return nil }
+                guard let receiptData = data["receipt"] as? [String: Any] else {
+                    throw NSError(domain: "ReceiptInvite", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invite is missing receipt data."])
+                }
+
+                var copied = receiptData
+                copied["ownerUserId"] = currentUserId
+                copied["createdAt"] = receiptData["createdAt"] ?? Timestamp(date: .now)
+
+                transaction.setData(copied, forDocument: userReceiptRef, merge: true)
+                transaction.setData([
+                    "status": "accepted",
+                    "updatedAt": FieldValue.serverTimestamp(),
+                    "respondedAt": FieldValue.serverTimestamp()
+                ], forDocument: inviteRef, merge: true)
+                return nil
+            } catch let error as NSError {
+                errorPointer?.pointee = error
+                return nil
+            }
+        }
+    }
+
+    func declineInvite(inviteID: String, currentUserId: String) async throws {
+        let inviteRef = db.collection("receiptInvites").document(inviteID)
+        let snapshot = try await inviteRef.getDocument()
+        guard let data = snapshot.data() else { return }
+        guard (data["recipientId"] as? String) == currentUserId else {
+            throw NSError(domain: "ReceiptInvite", code: 3, userInfo: [NSLocalizedDescriptionKey: "You cannot decline this invite."])
+        }
+        guard (data["status"] as? String) == "pending" else { return }
+
+        try await inviteRef.setData([
+            "status": "declined",
+            "updatedAt": FieldValue.serverTimestamp(),
+            "respondedAt": FieldValue.serverTimestamp()
+        ], merge: true)
+    }
 }
 
 final class FirestoreSplitSessionRepository {
@@ -502,5 +615,89 @@ enum FirestoreSplitSessionMapper {
 
     private static func decimalString(_ value: Decimal) -> String {
         NSDecimalNumber(decimal: value).stringValue
+    }
+}
+
+enum FirestoreReceiptInviteMapper {
+    static func decodeInvite(documentID: String, data: [String: Any]) -> ReceiptInvite? {
+        guard
+            let senderId = data["senderId"] as? String,
+            let senderEmail = data["senderEmail"] as? String,
+            let recipientId = data["recipientId"] as? String,
+            let recipientEmail = data["recipientEmail"] as? String,
+            let status = data["status"] as? String,
+            let receiptRaw = data["receipt"] as? [String: Any],
+            let receipt = decodeEmbeddedReceipt(data: receiptRaw)
+        else {
+            return nil
+        }
+
+        return ReceiptInvite(
+            id: documentID,
+            senderId: senderId,
+            senderDisplayName: (data["senderDisplayName"] as? String) ?? senderEmail,
+            senderEmail: senderEmail,
+            recipientId: recipientId,
+            recipientEmail: recipientEmail,
+            status: status,
+            receipt: receipt,
+            createdAt: (data["createdAt"] as? Timestamp)?.dateValue(),
+            updatedAt: (data["updatedAt"] as? Timestamp)?.dateValue()
+        )
+    }
+
+    private static func decodeEmbeddedReceipt(data: [String: Any]) -> Receipt? {
+        guard
+            let merchantName = data["merchantName"] as? String,
+            let createdAtTimestamp = data["createdAt"] as? Timestamp,
+            let taxRaw = data["tax"] as? String,
+            let tipRaw = data["tip"] as? String,
+            let tax = Decimal(string: taxRaw),
+            let tip = Decimal(string: tipRaw),
+            let participantsRaw = data["participants"] as? [[String: Any]],
+            let itemsRaw = data["items"] as? [[String: Any]]
+        else {
+            return nil
+        }
+
+        let participants = participantsRaw.compactMap { raw -> Participant? in
+            guard
+                let idRaw = raw["id"] as? String,
+                let id = UUID(uuidString: idRaw),
+                let name = raw["name"] as? String
+            else { return nil }
+            return Participant(id: id, name: name)
+        }
+
+        let items = itemsRaw.compactMap { raw -> ReceiptItem? in
+            guard
+                let idRaw = raw["id"] as? String,
+                let id = UUID(uuidString: idRaw),
+                let name = raw["name"] as? String,
+                let quantity = raw["quantity"] as? Int,
+                let unitPriceRaw = raw["unitPrice"] as? String,
+                let unitPrice = Decimal(string: unitPriceRaw),
+                let assignedRaw = raw["assignedParticipantIDs"] as? [String]
+            else { return nil }
+
+            let assignedIDs = Set(assignedRaw.compactMap { UUID(uuidString: $0) })
+            return ReceiptItem(
+                id: id,
+                name: name,
+                quantity: quantity,
+                unitPrice: unitPrice,
+                assignedParticipantIDs: assignedIDs
+            )
+        }
+
+        return Receipt(
+            merchantName: merchantName,
+            createdAt: createdAtTimestamp.dateValue(),
+            participants: participants,
+            items: items,
+            tax: tax,
+            tip: tip,
+            sourceOCRJobID: data["sourceOCRJobID"] as? String
+        )
     }
 }
