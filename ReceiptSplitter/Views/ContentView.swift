@@ -53,11 +53,12 @@ struct ContentView: View {
                 ) {
                     isAccountSheetPresented = true
                 } onReceiptSaved: { newReceipt in
-                    receipts.insert(newReceipt, at: 0)
+                    let normalized = normalizeParticipantNames(in: newReceipt)
+                    receipts.insert(normalized, at: 0)
                     Task {
                         do {
-                            try await receiptRepository.saveReceipt(newReceipt, ownerUserId: currentUser.id)
-                            try await sendInvitesIfNeeded(for: newReceipt)
+                            try await receiptRepository.saveReceipt(normalized, ownerUserId: currentUser.id)
+                            try await sendInvitesIfNeeded(for: normalized)
                         } catch {
                             loadErrorMessage = "Saved locally, but failed to sync to cloud."
                         }
@@ -71,7 +72,7 @@ struct ContentView: View {
             NavigationStack {
                 HistoryView(
                     currentUserID: currentUser.id,
-                    currentUserEmail: currentUser.email ?? "unknown@example.com",
+                    currentUserDisplayName: effectiveCurrentUserDisplayName,
                     receipts: receipts,
                     incomingInvites: incomingReceiptInvites,
                     friends: friends,
@@ -177,18 +178,34 @@ struct ContentView: View {
     }
 
     private func saveReceiptChanges(_ receipt: Receipt) async {
-        if let index = receipts.firstIndex(where: { $0.id == receipt.id }) {
-            receipts[index] = receipt
+        let normalized = normalizeParticipantNames(in: receipt)
+
+        if let index = receipts.firstIndex(where: { $0.id == normalized.id }) {
+            receipts[index] = normalized
         } else {
-            receipts.insert(receipt, at: 0)
+            receipts.insert(normalized, at: 0)
         }
 
         do {
-            try await receiptRepository.saveReceipt(receipt, ownerUserId: currentUser.id)
-            try await sendInvitesIfNeeded(for: receipt)
+            try await receiptRepository.saveReceipt(normalized, ownerUserId: currentUser.id)
+            try await sendInvitesIfNeeded(for: normalized)
         } catch {
             loadErrorMessage = "Failed to save split changes. \(readableCloudErrorMessage(from: error))"
         }
+    }
+
+    private func normalizeParticipantNames(in receipt: Receipt) -> Receipt {
+        var normalized = receipt
+        let ownerName = effectiveCurrentUserDisplayName
+
+        for index in normalized.participants.indices {
+            let trimmed = normalized.participants[index].name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.caseInsensitiveCompare("you") == .orderedSame {
+                normalized.participants[index].name = ownerName
+            }
+        }
+
+        return normalized
     }
 
     private func sendInvitesIfNeeded(for receipt: Receipt) async throws {
@@ -284,6 +301,11 @@ struct ContentView: View {
     private var defaultDisplayName: String {
         guard let email = currentUser.email, !email.isEmpty else { return "User" }
         return email.components(separatedBy: "@").first ?? "User"
+    }
+
+    private var effectiveCurrentUserDisplayName: String {
+        let trimmed = accountDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultDisplayName : trimmed
     }
 
     private var friendDisplayNames: [String] {
@@ -1650,7 +1672,7 @@ private struct ActivityRow: View {
 
 private struct HistoryView: View {
     let currentUserID: String
-    let currentUserEmail: String
+    let currentUserDisplayName: String
     let receipts: [Receipt]
     let incomingInvites: [ReceiptInvite]
     let friends: [AppFriend]
@@ -1671,7 +1693,7 @@ private struct HistoryView: View {
         .navigationDestination(item: $selectedReceipt) { receipt in
             ReceiptSplitOverviewView(
                 receipt: receipt,
-                currentUserEmail: currentUserEmail,
+                currentUserDisplayName: currentUserDisplayName,
                 friends: friends
             ) { updatedReceipt in
                 await onSaveReceipt(updatedReceipt)
@@ -1835,7 +1857,7 @@ private struct HistoryView: View {
 
 private struct ReceiptSplitOverviewView: View {
     let receipt: Receipt
-    let currentUserEmail: String
+    let currentUserDisplayName: String
     let friends: [AppFriend]
     let onSave: (Receipt) async -> Void
 
@@ -1846,18 +1868,18 @@ private struct ReceiptSplitOverviewView: View {
 
     init(
         receipt: Receipt,
-        currentUserEmail: String,
+        currentUserDisplayName: String,
         friends: [AppFriend],
         onSave: @escaping (Receipt) async -> Void
     ) {
         self.receipt = receipt
-        self.currentUserEmail = currentUserEmail
+        self.currentUserDisplayName = currentUserDisplayName
         self.friends = friends
         self.onSave = onSave
 
         var normalized = receipt
         if normalized.participants.isEmpty {
-            normalized.participants = [Participant(name: "You")]
+            normalized.participants = [Participant(name: currentUserDisplayName)]
         }
         for index in normalized.items.indices {
             if normalized.items[index].assignedParticipantIDs.isEmpty,
