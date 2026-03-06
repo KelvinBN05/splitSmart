@@ -102,19 +102,6 @@ final class FirestoreSplitSessionRepository {
             "status": session.status,
             "updatedAt": Timestamp(date: session.updatedAt)
         ], forDocument: ownerSessionRef, merge: true)
-        for member in extraMembers {
-            let memberSessionRef = db
-                .collection("users")
-                .document(member.id)
-                .collection("splitSessions")
-                .document(sessionID)
-            batch.setData([
-                "sessionId": sessionID,
-                "merchantName": session.merchantName,
-                "status": session.status,
-                "updatedAt": Timestamp(date: session.updatedAt)
-            ], forDocument: memberSessionRef, merge: true)
-        }
         try await batch.commit()
         return session
     }

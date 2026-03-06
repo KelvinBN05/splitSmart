@@ -7,6 +7,7 @@ import FirebaseStorage
 import Vision
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import VisionKit
 #elseif os(macOS)
 import AppKit
 #endif
@@ -43,7 +44,9 @@ struct ContentView: View {
                     currentUserID: currentUser.id,
                     receipts: receipts,
                     userInitials: userInitials,
-                    friendSuggestions: friendDisplayNames
+                    friendSuggestions: friendDisplayNames,
+                    isLoadingReceipts: isLoadingReceipts,
+                    loadErrorMessage: loadErrorMessage
                 ) {
                     isAccountSheetPresented = true
                 } onReceiptSaved: { newReceipt in
@@ -66,7 +69,8 @@ struct ContentView: View {
                     currentUserID: currentUser.id,
                     currentUserEmail: currentUser.email ?? "unknown@example.com",
                     receipts: receipts,
-                    friends: friends
+                    friends: friends,
+                    isLoadingReceipts: isLoadingReceipts
                 )
             }
             .tabItem {
@@ -237,10 +241,13 @@ private struct HomeView: View {
     let receipts: [Receipt]
     let userInitials: String
     let friendSuggestions: [String]
+    let isLoadingReceipts: Bool
+    let loadErrorMessage: String?
     let onAccountTapped: () -> Void
     let onReceiptSaved: (Receipt) -> Void
 #if os(iOS)
     @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isDocumentScannerPresented = false
 #endif
     @State private var isProcessingPhoto = false
     @State private var photoProcessingError: String?
@@ -287,14 +294,27 @@ private struct HomeView: View {
                 parsedPrefill = approvedPrefill
             }
         }
+#if os(iOS)
+        .sheet(isPresented: $isDocumentScannerPresented) {
+            DocumentReceiptScannerView { scannedImage in
+                isDocumentScannerPresented = false
+                Task {
+                    await processCapturedImage(scannedImage)
+                }
+            } onCancel: {
+                isDocumentScannerPresented = false
+            }
+        }
+#endif
     }
 
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 6) {
                 Text("SplitSmart")
-                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .font(.largeTitle.weight(.bold))
                     .foregroundStyle(Color(red: 0.06, green: 0.10, blue: 0.22))
+                    .minimumScaleFactor(0.85)
                 Text(Formatters.fullDate.string(from: Date()))
                     .font(.title3)
                     .foregroundStyle(.secondary)
@@ -310,6 +330,7 @@ private struct HomeView: View {
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Open account")
         }
     }
 
@@ -323,8 +344,9 @@ private struct HomeView: View {
                 .clipShape(Circle())
 
             Text("Scan Receipt")
-                .font(.system(size: 40, weight: .bold, design: .rounded))
+                .font(.largeTitle.weight(.bold))
                 .foregroundStyle(.white)
+                .minimumScaleFactor(0.85)
 
             Text("Start splitting")
                 .font(.title3.weight(.semibold))
@@ -355,17 +377,28 @@ private struct HomeView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isProcessingPhoto || isBusy)
+
+                Button {
+                    isDocumentScannerPresented = true
+                } label: {
+                    SmallActionCard(
+                        title: isBusy ? "Scanning..." : "Live Scan",
+                        systemImage: "doc.viewfinder"
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isProcessingPhoto || isBusy)
 #else
                 SmallActionCard(title: "Upload Photo", systemImage: "photo")
 #endif
-
-                NavigationLink {
-                    ManualEntryView(friendSuggestions: friendSuggestions, onReceiptSaved: onReceiptSaved)
-                } label: {
-                    SmallActionCard(title: "Manual Entry", systemImage: "plus")
-                }
-                .buttonStyle(.plain)
             }
+
+            NavigationLink {
+                ManualEntryView(friendSuggestions: friendSuggestions, onReceiptSaved: onReceiptSaved)
+            } label: {
+                SmallActionCard(title: "Manual Entry", systemImage: "plus")
+            }
+            .buttonStyle(.plain)
 
             if let photoProcessingError {
                 Text(photoProcessingError)
@@ -505,11 +538,40 @@ private struct HomeView: View {
                 scanFlowDetail = "Could not process that image format."
                 return
             }
+            try await processImageData(data)
+            selectedPhotoItem = nil
+        } catch {
+            photoProcessingError = error.localizedDescription
+            scanFlowStage = .failed
+            scanFlowDetail = error.localizedDescription
+        }
+    }
 
-            let prefill = try await DocumentAIOCRJobService.createAndAwaitOCRJob(
-                imageData: data,
-                ownerUserID: currentUserID,
-                onStatusChange: { status in
+    private func processCapturedImage(_ image: UIImage) async {
+        guard !isProcessingPhoto else { return }
+        isProcessingPhoto = true
+        photoProcessingError = nil
+        scanFlowStage = .uploading
+        scanFlowDetail = "Preparing captured image."
+        defer { isProcessingPhoto = false }
+
+        do {
+            guard let imageData = image.jpegData(compressionQuality: 0.92) else {
+                throw NSError(domain: "Scan", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not encode captured image."])
+            }
+            try await processImageData(imageData)
+        } catch {
+            photoProcessingError = error.localizedDescription
+            scanFlowStage = .failed
+            scanFlowDetail = error.localizedDescription
+        }
+    }
+
+    private func processImageData(_ imageData: Data) async throws {
+        let prefill = try await DocumentAIOCRJobService.createAndAwaitOCRJob(
+            imageData: imageData,
+            ownerUserID: currentUserID,
+            onStatusChange: { status in
                 switch status {
                 case .uploading:
                     scanFlowStage = .uploading
@@ -520,16 +582,10 @@ private struct HomeView: View {
                 }
             })
 
-            latestOCRJobID = prefill.sourceOCRJobID
-            scanFlowStage = .review
-            scanFlowDetail = "Review extracted items before saving."
-            reviewPrefill = OCRReviewPrefill(prefill: prefill)
-            selectedPhotoItem = nil
-        } catch {
-            photoProcessingError = error.localizedDescription
-            scanFlowStage = .failed
-            scanFlowDetail = error.localizedDescription
-        }
+        latestOCRJobID = prefill.sourceOCRJobID
+        scanFlowStage = .review
+        scanFlowDetail = "Review extracted items before saving."
+        reviewPrefill = OCRReviewPrefill(prefill: prefill)
     }
 #endif
 
@@ -545,7 +601,11 @@ private struct HomeView: View {
                     .foregroundStyle(.blue)
             }
 
-            if receipts.isEmpty {
+            if isLoadingReceipts {
+                LoadingActivityCard()
+            } else if let loadErrorMessage, receipts.isEmpty {
+                ErrorActivityCard(message: loadErrorMessage)
+            } else if receipts.isEmpty {
                 EmptyActivityCard()
             } else {
                 ForEach(receipts.prefix(2)) { receipt in
@@ -557,6 +617,50 @@ private struct HomeView: View {
 }
 
 #if os(iOS)
+private struct DocumentReceiptScannerView: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCapture: onCapture, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let controller = VNDocumentCameraViewController()
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: VNDocumentCameraViewController, context: Context) {}
+
+    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+        private let onCapture: (UIImage) -> Void
+        private let onCancel: () -> Void
+
+        init(onCapture: @escaping (UIImage) -> Void, onCancel: @escaping () -> Void) {
+            self.onCapture = onCapture
+            self.onCancel = onCancel
+        }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            guard scan.pageCount > 0 else {
+                onCancel()
+                return
+            }
+            let image = scan.imageOfPage(at: 0)
+            onCapture(image)
+        }
+
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
+            onCancel()
+        }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
+            onCancel()
+        }
+    }
+}
+
 private enum DocumentAIOCRJobService {
     private static let db = Firestore.firestore()
     private static let storage = Storage.storage()
@@ -1394,13 +1498,8 @@ private struct SmallActionCard: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, minHeight: 146, alignment: .leading)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 4)
+        .appCard(cornerRadius: 24)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1437,13 +1536,8 @@ private struct ActivityRow: View {
             }
         }
         .padding(18)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+        .appCard(cornerRadius: 24)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1452,6 +1546,7 @@ private struct HistoryView: View {
     let currentUserEmail: String
     let receipts: [Receipt]
     let friends: [AppFriend]
+    let isLoadingReceipts: Bool
     private let splitSessionRepository = FirestoreSplitSessionRepository()
     @State private var creatingSessionReceiptID: UUID?
     @State private var sessionStatusMessage: String?
@@ -1510,7 +1605,14 @@ private struct HistoryView: View {
 
     @ViewBuilder
     private var historyContent: some View {
-        if receipts.isEmpty {
+        if isLoadingReceipts && receipts.isEmpty {
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Loading receipts...")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if receipts.isEmpty {
             ContentUnavailableView(
                 "No Receipts Yet",
                 systemImage: "doc.text.magnifyingglass",
@@ -1765,11 +1867,16 @@ private struct SplitSessionDetailView: View {
                 Section("Members") {
                     ForEach(session.members) { member in
                         HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(member.displayName)
-                                Text(member.role)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            if editingMemberID == member.id {
+                                TextField("Display Name", text: $editingDisplayName)
+                                    .textFieldStyle(.roundedBorder)
+                            } else {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(member.displayName)
+                                    Text(member.role)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             Spacer()
                             if session.readyUserIds.contains(member.id) {
@@ -1783,14 +1890,35 @@ private struct SplitSessionDetailView: View {
                             }
 
                             if canEditDisplayName(memberID: member.id, session: session) {
-                                Button {
-                                    editingMemberID = member.id
-                                    editingDisplayName = member.displayName
-                                } label: {
-                                    Image(systemName: "pencil")
-                                        .foregroundStyle(.blue)
+                                if editingMemberID == member.id {
+                                    HStack(spacing: 10) {
+                                        Button {
+                                            editingMemberID = nil
+                                        } label: {
+                                            Image(systemName: "xmark.circle")
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        Button {
+                                            Task { await saveDisplayName() }
+                                        } label: {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .foregroundStyle(.green)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(editingDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                    }
+                                } else {
+                                    Button {
+                                        editingMemberID = member.id
+                                        editingDisplayName = member.displayName
+                                    } label: {
+                                        Image(systemName: "pencil")
+                                            .foregroundStyle(.blue)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -1890,32 +2018,6 @@ private struct SplitSessionDetailView: View {
         .onDisappear {
             listener?.remove()
             listener = nil
-        }
-        .sheet(isPresented: Binding(
-            get: { editingMemberID != nil },
-            set: { if !$0 { editingMemberID = nil } }
-        )) {
-            NavigationStack {
-                Form {
-                    Section("Display Name") {
-                        TextField("Name", text: $editingDisplayName)
-                    }
-                }
-                .navigationTitle("Edit Name")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") {
-                            editingMemberID = nil
-                        }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Save") {
-                            Task { await saveDisplayName() }
-                        }
-                        .disabled(editingDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
-            }
         }
         .alert("Invite", isPresented: Binding(get: { inviteCodeStatus != nil }, set: { if !$0 { inviteCodeStatus = nil } })) {
             Button("OK", role: .cancel) {}
@@ -2025,12 +2127,39 @@ private struct EmptyActivityCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
+        .appCard(cornerRadius: 24)
+    }
+}
+
+private struct LoadingActivityCard: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            Text("Loading recent activity...")
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .appCard(cornerRadius: 24)
+    }
+}
+
+private struct ErrorActivityCard: View {
+    let message: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Could not load activity")
+                .font(.headline)
+                .foregroundStyle(.red)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .appCard(cornerRadius: 24)
     }
 }
 
@@ -2403,6 +2532,27 @@ private enum Formatters {
 
     static func currencyString(from amount: Decimal) -> String {
         currency.string(from: NSDecimalNumber(decimal: amount)) ?? "$0.00"
+    }
+}
+
+private struct AppCardModifier: ViewModifier {
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.black.opacity(0.05), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+    }
+}
+
+private extension View {
+    func appCard(cornerRadius: CGFloat = 20) -> some View {
+        modifier(AppCardModifier(cornerRadius: cornerRadius))
     }
 }
 
