@@ -86,7 +86,15 @@ test('parseItemsFromLines aggregates duplicate lines into quantity', () => {
   const items = parser.parseItemsFromLines(targetLines);
   const chobaniOneDollar = items.find((item) => item.name === 'CHOBANI' && item.price === '1');
   assert(chobaniOneDollar);
-  assert.equal(chobaniOneDollar.quantity, 3);
+  assert.equal(chobaniOneDollar.quantity, 5);
+  assert(!items.some((item) => item.name === 'CHOBANI' && item.price === '2'));
+});
+
+test('parseItemsFromLines applies quantity summary lines to previous item', () => {
+  const items = parser.parseItemsFromLines(targetLines);
+  const oreo = items.find((item) => item.name === 'OREO COOKIE' && item.price === '2.99');
+  assert(oreo);
+  assert.equal(oreo.quantity, 2);
 });
 
 test('classifyReceiptLayout identifies paired-line mixed receipts', () => {

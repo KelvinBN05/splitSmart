@@ -6,7 +6,7 @@ const { DocumentProcessorServiceClient } = require("@google-cloud/documentai");
 admin.initializeApp();
 
 const documentAIClient = new DocumentProcessorServiceClient();
-const PARSER_VERSION = "docai-v8-2026-03-06";
+const PARSER_VERSION = "docai-v9-2026-03-06";
 
 exports.processOCRJob = functions.firestore
   .document("users/{userId}/ocrJobs/{jobId}")
@@ -335,8 +335,13 @@ function parseItemsFromLines(lines) {
     if (/^[0-9]+\.[0-9]{2}\s*[A-Z]?$/.test(line)) continue;
 
     // Case A: same-line item + price.
-    const sameLine = parseInlineItemLine(line);
+    let sameLine = parseInlineItemLine(line);
     if (sameLine) {
+      const qtySummary = parseQuantitySummaryLine(window[i + 1]);
+      if (qtySummary) {
+        sameLine = applyQuantitySummaryToItem(sameLine, qtySummary);
+        i += 1;
+      }
       const sig = `${sameLine.name.toLowerCase()}|${sameLine.price}`;
       const existing = bySig.get(sig);
       if (existing) {
@@ -372,12 +377,19 @@ function parseItemsFromLines(lines) {
     const hasNearbySku = hasNearbySkuLine(window, i);
     if (shouldRejectPairedItemCandidate(cleanedName, foundPrice, foundPriceLine, hasNearbySku)) continue;
 
-    const sig = `${cleanedName.toLowerCase()}|${foundPrice}`;
+    let parsedPairedItem = { name: cleanedName, quantity, price: foundPrice };
+    const qtySummary = parseQuantitySummaryLine(window[consumedUntil + 1]);
+    if (qtySummary) {
+      parsedPairedItem = applyQuantitySummaryToItem(parsedPairedItem, qtySummary);
+      consumedUntil += 1;
+    }
+
+    const sig = `${parsedPairedItem.name.toLowerCase()}|${parsedPairedItem.price}`;
     const existing = bySig.get(sig);
     if (existing) {
-      existing.quantity += quantity;
+      existing.quantity += parsedPairedItem.quantity;
     } else {
-      bySig.set(sig, { name: cleanedName, quantity, price: foundPrice });
+      bySig.set(sig, parsedPairedItem);
     }
     i = consumedUntil;
     if (bySig.size >= 60) break;
@@ -408,6 +420,54 @@ function hasNearbySkuLine(lines, nameLineIndex) {
   const prev1 = String(lines[nameLineIndex - 1] || "").trim();
   const prev2 = String(lines[nameLineIndex - 2] || "").trim();
   return /^\d{6,14}$/.test(prev1) || /^\d{6,14}$/.test(prev2);
+}
+
+function parseQuantitySummaryLine(line) {
+  const value = String(line || "").trim();
+  if (!value) return null;
+
+  const atMatch = value.match(/^(\d+)\s*@\s*\$?([0-9]+\.[0-9]{2})\s*ea$/i);
+  if (atMatch) {
+    const quantity = Number(atMatch[1]);
+    const unitPrice = Number(atMatch[2]);
+    if (!Number.isNaN(quantity) && quantity > 0 && !Number.isNaN(unitPrice)) {
+      return {
+        quantity: Math.min(99, Math.floor(quantity)),
+        unitPrice,
+        totalPrice: Number((quantity * unitPrice).toFixed(2)),
+      };
+    }
+  }
+
+  const xMatch = value.match(/^(\d+)\s*[xX]\s*\$?([0-9]+\.[0-9]{2})$/);
+  if (xMatch) {
+    const quantity = Number(xMatch[1]);
+    const unitPrice = Number(xMatch[2]);
+    if (!Number.isNaN(quantity) && quantity > 0 && !Number.isNaN(unitPrice)) {
+      return {
+        quantity: Math.min(99, Math.floor(quantity)),
+        unitPrice,
+        totalPrice: Number((quantity * unitPrice).toFixed(2)),
+      };
+    }
+  }
+
+  return null;
+}
+
+function applyQuantitySummaryToItem(item, summary) {
+  const currentPrice = Number(item.price || 0);
+  if (Number.isNaN(currentPrice) || currentPrice <= 0) return item;
+
+  const equalsTotal = Math.abs(currentPrice - summary.totalPrice) <= 0.02;
+  const equalsUnit = Math.abs(currentPrice - summary.unitPrice) <= 0.02;
+  if (!equalsTotal && !equalsUnit) return item;
+
+  return {
+    ...item,
+    quantity: summary.quantity,
+    price: normalizeAmount(summary.unitPrice.toFixed(2)),
+  };
 }
 
 function shouldRejectPairedItemCandidate(name, price, priceLine, hasNearbySku) {
