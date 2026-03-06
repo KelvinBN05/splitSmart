@@ -6,7 +6,7 @@ const { DocumentProcessorServiceClient } = require("@google-cloud/documentai");
 admin.initializeApp();
 
 const documentAIClient = new DocumentProcessorServiceClient();
-const PARSER_VERSION = "docai-v9-2026-03-06";
+const PARSER_VERSION = "docai-v10-2026-03-06";
 
 exports.processOCRJob = functions.firestore
   .document("users/{userId}/ocrJobs/{jobId}")
@@ -120,6 +120,7 @@ function mapReceiptFromDocumentAI(document) {
   const layout = classifyReceiptLayout(lines, lineItems.length);
   const candidates = [
     { name: "entity", items: aggregateItems(entityItems) },
+    { name: "columnar", items: parseItemsFromColumnarLines(lines) },
     { name: "paired-lines", items: parseItemsFromLines(lines) },
     { name: "single-line", items: parseItemsInline(lines) },
     { name: "raw-text", items: parseItemsFromRawText(rawText) },
@@ -174,14 +175,18 @@ function classifyReceiptLayout(lines, lineItemEntityCount) {
   const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
   const priceOnlyCount = window.filter((line) => /^[0-9]+\.[0-9]{2}\s*[A-Z]?$/.test(String(line).trim())).length;
   const upcOnlyCount = window.filter((line) => /^\d{6,14}$/.test(String(line).trim())).length;
+  const quantityNameCount = window.filter((line) => /^\d+\s+[A-Za-z]/.test(String(line).trim())).length;
   const inlineItemCount = window.filter((line) =>
     /^(.+?)\s+(?:\d{6,14}\s+)?([0-9]+\.[0-9]{2})\s*[A-Z]?$/.test(String(line).trim())
   ).length;
 
-  if (lineItemEntityCount >= 3) return { kind: "entity-rich", priceOnlyCount, upcOnlyCount, inlineItemCount };
-  if (priceOnlyCount >= 3 && upcOnlyCount >= 3) return { kind: "paired-lines", priceOnlyCount, upcOnlyCount, inlineItemCount };
-  if (inlineItemCount >= 5) return { kind: "single-line", priceOnlyCount, upcOnlyCount, inlineItemCount };
-  return { kind: "mixed", priceOnlyCount, upcOnlyCount, inlineItemCount };
+  if (lineItemEntityCount >= 3) return { kind: "entity-rich", priceOnlyCount, upcOnlyCount, quantityNameCount, inlineItemCount };
+  if (quantityNameCount >= 5 && priceOnlyCount >= 5 && inlineItemCount <= 2) {
+    return { kind: "columnar", priceOnlyCount, upcOnlyCount, quantityNameCount, inlineItemCount };
+  }
+  if (priceOnlyCount >= 3 && upcOnlyCount >= 3) return { kind: "paired-lines", priceOnlyCount, upcOnlyCount, quantityNameCount, inlineItemCount };
+  if (inlineItemCount >= 5) return { kind: "single-line", priceOnlyCount, upcOnlyCount, quantityNameCount, inlineItemCount };
+  return { kind: "mixed", priceOnlyCount, upcOnlyCount, quantityNameCount, inlineItemCount };
 }
 
 function scoreCandidate(items, lines, layout) {
@@ -205,6 +210,10 @@ function scoreCandidate(items, lines, layout) {
   if (layout.kind === "paired-lines") {
     const priceOnlyCount = layout.priceOnlyCount || 0;
     if (priceOnlyCount >= 3) score += 8;
+  }
+  if (layout.kind === "columnar") {
+    const quantityNameCount = layout.quantityNameCount || 0;
+    if (quantityNameCount >= 5) score += 10;
   }
   if (layout.kind === "single-line") {
     const inlineItemCount = layout.inlineItemCount || 0;
@@ -414,6 +423,52 @@ function parseItemsFromLines(lines) {
   }
 
   return Array.from(bySig.values());
+}
+
+function parseItemsFromColumnarLines(lines) {
+  const stopAt = lines.findIndex((line) => /subtotal|^total\b/i.test(String(line)));
+  const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
+  const noise = /(st#|op#|te#|tr#|approval|ref\s*#|trans|payment|service|validation|thank you|visa|debit|terminal|change due|items sold|manager|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due|save money|live better|^\(|bluebell|new philadelphia|walmart|^\*+$|^[\-–—]$|^check:|^opened:|^order:|^order type:|^name:|^server:|pay with cash|^saved\b|^cartwheel\b|redcard savings|health-beauty-cosmetics|^home$|^grocery$|^cleaning supplies$|expires)/i;
+  const quantityNameRows = [];
+  const priceOnlyRows = [];
+
+  for (const raw of window) {
+    const line = String(raw || "").trim();
+    if (!line || noise.test(line)) continue;
+    if (isQuantitySummaryLine(line)) continue;
+    if (/^\d{6,14}$/.test(line)) continue;
+
+    const qtyMatch = line.match(/^(\d+)\s+(.+)$/);
+    if (qtyMatch && /[A-Za-z]/.test(qtyMatch[2])) {
+      const quantity = Math.max(1, parseInt(qtyMatch[1], 10) || 1);
+      const name = cleanItemName(qtyMatch[2]);
+      if (name && looksLikeItemName(name)) {
+        quantityNameRows.push({ name, quantity });
+        continue;
+      }
+    }
+
+    const price = extractPriceFromLine(line);
+    if (price && /^[0-9]+\.[0-9]{2}\s*[A-Z]?$/.test(line)) {
+      priceOnlyRows.push(price);
+    }
+  }
+
+  if (quantityNameRows.length < 3 || priceOnlyRows.length < 3) return [];
+
+  const pairCount = Math.min(quantityNameRows.length, priceOnlyRows.length);
+  if (pairCount < 3) return [];
+
+  const pairs = [];
+  for (let i = 0; i < pairCount; i += 1) {
+    const row = quantityNameRows[i];
+    const price = priceOnlyRows[i];
+    if (!row?.name || !price) continue;
+    pairs.push({ name: row.name, quantity: row.quantity, price });
+    if (pairs.length >= 80) break;
+  }
+
+  return aggregateItems(pairs);
 }
 
 function hasNearbySkuLine(lines, nameLineIndex) {
@@ -686,13 +741,21 @@ function parseTotalsFromLines(lines) {
     if (subtotalMatch) subtotal = Number(subtotalMatch[1]) || subtotal;
     const totalMatch = line.match(/^total[^0-9]*([0-9]+\.[0-9]{2})/i);
     if (totalMatch) total = Number(totalMatch[1]) || total;
-    if (/subtotal/i.test(line) && i + 1 < lines.length) {
-      const next = String(lines[i + 1] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
-      if (next) subtotal = Number(next[1]) || subtotal;
+    if (/subtotal/i.test(line) && !subtotalMatch) {
+      for (let lookahead = i + 1; lookahead <= Math.min(i + 5, lines.length - 1); lookahead += 1) {
+        const next = String(lines[lookahead] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
+        if (!next) continue;
+        subtotal = Number(next[1]) || subtotal;
+        break;
+      }
     }
-    if (/^total\b/i.test(line) && i + 1 < lines.length) {
-      const next = String(lines[i + 1] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
-      if (next) total = Number(next[1]) || total;
+    if (/^total\b/i.test(line) && !totalMatch) {
+      for (let lookahead = i + 1; lookahead <= Math.min(i + 6, lines.length - 1); lookahead += 1) {
+        const next = String(lines[lookahead] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
+        if (!next) continue;
+        total = Number(next[1]) || total;
+        break;
+      }
     }
   }
   return { subtotal, total };
@@ -710,6 +773,7 @@ function deriveTaxFromTotals(totals) {
 exports.__test__ = {
   mapReceiptFromDocumentAI,
   parseItemsFromLines,
+  parseItemsFromColumnarLines,
   parseItemsFromRawText,
   parseTaxFromLines,
   parseTotalsFromLines,

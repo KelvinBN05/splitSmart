@@ -55,6 +55,45 @@ const restaurantLines = [
   '57.71',
 ];
 
+const greenSupermarketLines = [
+  'Green',
+  'Supermarket',
+  '2 APPLE',
+  '3 BANANA',
+  '2 ORANGE',
+  '1 PEAR',
+  '2 GRAPES',
+  '1 STRAWBERRY',
+  '1 BLUEBERRY',
+  '2 KIWI',
+  '1 WATERMELON',
+  '1 LEMON',
+  '1 RASPBERRY',
+  '1 MILK',
+  '1 CHEESE',
+  '1 YOGURT',
+  '1.00',
+  '1.50',
+  '1.20',
+  '0.75',
+  '3.00',
+  '2.50',
+  '2.00',
+  '1.80',
+  '4.50',
+  '0.60',
+  '3.00',
+  '1.50',
+  '2.80',
+  '1.20',
+  'TOTAL',
+  'CASH',
+  'CHANGE',
+  '27.35',
+  '30.00',
+  '2.65',
+];
+
 test('detectMerchantFromLines infers Target brand from redcard/cartwheel context', () => {
   assert.equal(parser.detectMerchantFromLines(targetLines), 'Target');
 });
@@ -145,4 +184,26 @@ test('restaurant receipt parsing keeps core menu items and tax', () => {
   assert(mapped.items.some((item) => item.price === '18'));
   assert(mapped.items.some((item) => item.price === '21.95'));
   assert(mapped.items.some((item) => item.price === '12.75'));
+});
+
+test('parseItemsFromColumnarLines pairs quantity-name rows with trailing price column', () => {
+  const items = parser.parseItemsFromColumnarLines(greenSupermarketLines);
+  assert.equal(items.length, 14);
+  assert(items.some((item) => item.name === 'APPLE' && item.quantity === 2 && item.price === '1'));
+  assert(items.some((item) => item.name === 'WATERMELON' && item.quantity === 1 && item.price === '4.5'));
+  assert(items.some((item) => item.name === 'YOGURT' && item.quantity === 1 && item.price === '1.2'));
+});
+
+test('mapReceiptFromDocumentAI picks columnar parser for simple supermarket receipt', () => {
+  const mapped = parser.mapReceiptFromDocumentAI({
+    text: greenSupermarketLines.join('\n'),
+    pages: [{ lines: [] }],
+    entities: [],
+  });
+
+  assert.equal(mapped.merchantName, 'Green');
+  assert.equal(mapped.debug.parseMode, 'columnar->columnar');
+  assert.equal(mapped.items.length, 14);
+  assert.equal(mapped.debug.itemCount, 14);
+  assert.equal(mapped.debug.totals.total, 27.35);
 });
