@@ -6,7 +6,7 @@ const { DocumentProcessorServiceClient } = require("@google-cloud/documentai");
 admin.initializeApp();
 
 const documentAIClient = new DocumentProcessorServiceClient();
-const PARSER_VERSION = "docai-v11-2026-03-06";
+const PARSER_VERSION = "docai-v12-2026-03-06";
 
 exports.processOCRJob = functions.firestore
   .document("users/{userId}/ocrJobs/{jobId}")
@@ -331,7 +331,7 @@ function parseTaxFromLines(lines) {
 function parseItemsFromLines(lines) {
   const stopAt = lines.findIndex((line) => /subtotal|^total\b/i.test(String(line)));
   const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
-  const noise = /(st#|op#|te#|tr#|approval|ref\s*#|trans|payment|service|validation|thank you|visa|debit|terminal|change due|items sold|manager|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due|save money|live better|^\(|bluebell|new philadelphia|walmart|^\*+$|^[\-–—]$|^check:|^opened:|^order:|^order type:|^name:|^server:|pay with cash|^saved\b|^cartwheel\b|redcard savings|health-beauty-cosmetics|^home$|^grocery$|^cleaning supplies$|expires)/i;
+  const noise = /(st#|op#|te#|tr#|approval|ref\s*#|trans|payment|service|validation|thank you|visa|debit|terminal|change due|items sold|manager|customer copy|subtotal|^total\b|tax\b|tip\b|gratuity|balance due|save money|live better|^\(|bluebell|new philadelphia|walmart|^\*+$|^[\-–—]$|^check:|^opened:|^order:|^order type:|^name:|^server:|^guests?:|pay with cash|^saved\b|^cartwheel\b|redcard savings|health-beauty-cosmetics|^home$|^grocery$|^cleaning supplies$|expires)/i;
   const bySig = new Map();
 
   // Pass 1: robust grouped parsing for tokenized lines
@@ -352,6 +352,7 @@ function parseItemsFromLines(lines) {
         sameLine = applyQuantitySummaryToItem(sameLine, qtySummary);
         i += 1;
       }
+      sameLine = normalizeQuantityPricedItem(sameLine, line);
       const sig = `${sameLine.name.toLowerCase()}|${sameLine.price}`;
       const existing = bySig.get(sig);
       if (existing) {
@@ -393,6 +394,7 @@ function parseItemsFromLines(lines) {
       parsedPairedItem = applyQuantitySummaryToItem(parsedPairedItem, qtySummary);
       consumedUntil += 1;
     }
+    parsedPairedItem = normalizeQuantityPricedItem(parsedPairedItem, line);
 
     const sig = `${parsedPairedItem.name.toLowerCase()}|${parsedPairedItem.price}`;
     const existing = bySig.get(sig);
@@ -791,7 +793,32 @@ function parseInlineItemLine(line) {
   const name = cleanItemName(namePart);
   if (!name || !price || !looksLikeItemName(name)) return null;
 
-  return { name, quantity: extractQuantityFromLine(value), price };
+  return normalizeQuantityPricedItem(
+    { name, quantity: extractQuantityFromLine(value), price },
+    value
+  );
+}
+
+function normalizeQuantityPricedItem(item, sourceLine) {
+  const quantity = Math.max(1, parseInt(item?.quantity, 10) || 1);
+  const unitOrLinePrice = Number(item?.price || 0);
+  if (quantity <= 1 || Number.isNaN(unitOrLinePrice) || unitOrLinePrice <= 0) return item;
+
+  const line = String(sourceLine || "");
+  const hasQtyPrefix = /^\s*\d+\s*[xX]\b/.test(line);
+  const hasPerEachMarker = /@|\bea\b|\beach\b/i.test(line);
+
+  // Executive decision:
+  // For "2X ITEM $6.00"-style lines without explicit per-each marker,
+  // interpret the shown amount as line total and convert to unit price.
+  if (hasQtyPrefix && !hasPerEachMarker) {
+    const derivedUnit = Number((unitOrLinePrice / quantity).toFixed(2));
+    if (derivedUnit > 0) {
+      return { ...item, quantity, price: normalizeAmount(derivedUnit.toFixed(2)) };
+    }
+  }
+
+  return item;
 }
 
 function extractPriceFromLine(line) {
