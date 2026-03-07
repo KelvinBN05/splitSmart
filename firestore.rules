@@ -10,7 +10,7 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get, list: if isSignedIn();
+      allow get, list: if isOwner(userId);
       allow create, update, delete: if isOwner(userId);
       match /receipts/{receiptId} {
         allow read, write: if isOwner(userId);
@@ -24,6 +24,14 @@ service cloud.firestore {
       match /friends/{friendUserId} {
         allow read, write: if isOwner(userId);
       }
+    }
+
+    // Public, minimal profile index for friend lookup by emailLower.
+    // Keep only non-sensitive fields here.
+    match /userLookup/{userId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isOwner(userId)
+        && request.resource.data.userId == userId;
     }
 
     match /splitSessions/{sessionId} {
@@ -44,8 +52,8 @@ service cloud.firestore {
     }
 
     match /friendRequests/{requestId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
+      allow get, list: if isSignedIn()
+        && request.auth.uid in resource.data.members;
       allow create: if isSignedIn()
         && request.resource.data.senderId == request.auth.uid
         && request.resource.data.recipientId is string

@@ -10,6 +10,7 @@ final class FirestoreUserProfileRepository: UserProfileRepository {
 
     func upsertUserProfile(for user: AppUser) async throws {
         let ref = db.collection("users").document(user.id)
+        let lookupRef = db.collection("userLookup").document(user.id)
         let snapshot = try await ref.getDocument()
         let normalizedEmail = (user.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
@@ -24,6 +25,15 @@ final class FirestoreUserProfileRepository: UserProfileRepository {
         }
 
         try await ref.setData(data, merge: true)
+
+        // Mirror minimal, non-sensitive data to public lookup index.
+        try await lookupRef.setData([
+            "userId": user.id,
+            "emailLower": normalizedEmail,
+            "displayName": "",
+            "updatedAt": FieldValue.serverTimestamp(),
+            "createdAt": snapshot.exists ? (snapshot.data()?["createdAt"] ?? FieldValue.serverTimestamp()) : FieldValue.serverTimestamp()
+        ], merge: true)
     }
 
     func fetchUserProfile(userID: String) async throws -> UserProfile? {
@@ -41,7 +51,13 @@ final class FirestoreUserProfileRepository: UserProfileRepository {
         guard !trimmed.isEmpty else { return }
 
         let ref = db.collection("users").document(userID)
+        let lookupRef = db.collection("userLookup").document(userID)
         try await ref.setData([
+            "displayName": trimmed,
+            "updatedAt": FieldValue.serverTimestamp()
+        ], merge: true)
+        try await lookupRef.setData([
+            "userId": userID,
             "displayName": trimmed,
             "updatedAt": FieldValue.serverTimestamp()
         ], merge: true)
@@ -129,8 +145,8 @@ final class FirestoreUserProfileRepository: UserProfileRepository {
             throw NSError(domain: "Friends", code: 2, userInfo: [NSLocalizedDescriptionKey: "You cannot add yourself."])
         }
 
-        let friendDoc = try await findUserDocument(byEmailInput: friendEmail)
-        guard let friendDoc else {
+        let friendLookup = try await findFriendLookup(byEmailInput: friendEmail)
+        guard let friendLookup else {
             throw NSError(
                 domain: "Friends",
                 code: 3,
@@ -138,15 +154,14 @@ final class FirestoreUserProfileRepository: UserProfileRepository {
             )
         }
 
-        let friendUserID = friendDoc.documentID
+        let friendUserID = friendLookup.userId
         guard friendUserID != currentUserID else {
             throw NSError(domain: "Friends", code: 4, userInfo: [NSLocalizedDescriptionKey: "You cannot add yourself."])
         }
 
-        let friendData = friendDoc.data()
-        let friendEmailValue = ((friendData["emailLower"] as? String) ?? (friendData["email"] as? String) ?? normalizedFriendEmail).lowercased()
+        let friendEmailValue = friendLookup.emailLower.isEmpty ? normalizedFriendEmail : friendLookup.emailLower
         let friendDisplayName = resolvedDisplayName(
-            name: (friendData["displayName"] as? String) ?? "",
+            name: friendLookup.displayName,
             email: friendEmailValue
         )
 
@@ -222,34 +237,27 @@ final class FirestoreUserProfileRepository: UserProfileRepository {
         ], merge: true)
     }
 
-    private func findUserDocument(byEmailInput input: String) async throws -> QueryDocumentSnapshot? {
+    private struct FriendLookupRecord {
+        let userId: String
+        let emailLower: String
+        let displayName: String
+    }
+
+    private func findFriendLookup(byEmailInput input: String) async throws -> FriendLookupRecord? {
         let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let raw = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
 
         let byLower = try await db
-            .collection("users")
+            .collection("userLookup")
             .whereField("emailLower", isEqualTo: normalized)
             .limit(to: 1)
             .getDocuments()
-        if let doc = byLower.documents.first {
-            return doc
-        }
-
-        let byEmailLowered = try await db
-            .collection("users")
-            .whereField("email", isEqualTo: normalized)
-            .limit(to: 1)
-            .getDocuments()
-        if let doc = byEmailLowered.documents.first {
-            return doc
-        }
-
-        let byEmailRaw = try await db
-            .collection("users")
-            .whereField("email", isEqualTo: raw)
-            .limit(to: 1)
-            .getDocuments()
-        return byEmailRaw.documents.first
+        guard let doc = byLower.documents.first else { return nil }
+        let data = doc.data()
+        let userId = (data["userId"] as? String) ?? doc.documentID
+        let emailLower = (data["emailLower"] as? String) ?? normalized
+        let displayName = (data["displayName"] as? String) ?? ""
+        return FriendLookupRecord(userId: userId, emailLower: emailLower, displayName: displayName)
     }
 
     private func decodeFriendRequest(documentID: String, data: [String: Any]) -> FriendRequest? {
