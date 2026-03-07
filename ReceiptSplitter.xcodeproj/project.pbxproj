@@ -32,6 +32,9 @@
 		44DE88DF2F4BDEA500400553 /* AuthGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88DE2F4BDEA500400553 /* AuthGateView.swift */; };
 		44DE88E12F4BDEA500400553 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E02F4BDEA500400553 /* LoginView.swift */; };
 		44DE88E32F4BDEA500400553 /* RegisterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E22F4BDEA500400553 /* RegisterView.swift */; };
+		44E10A092F624AAE00112233 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E10A062F624AAE00112233 /* HomeView.swift */; };
+		44E10A0A2F624AAE00112233 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E10A072F624AAE00112233 /* HistoryView.swift */; };
+		44E10A0B2F624AAE00112233 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E10A082F624AAE00112233 /* AccountView.swift */; };
 		44DE88E52F4BDEA500400553 /* UserProfileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E42F4BDEA500400553 /* UserProfileRepository.swift */; };
 		44DE88E72F4BDEA500400553 /* FirestoreUserProfileRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E62F4BDEA500400553 /* FirestoreUserProfileRepository.swift */; };
 		44DE88E92F4BDEA500400553 /* ReceiptRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44DE88E82F4BDEA500400553 /* ReceiptRepository.swift */; };
@@ -89,6 +92,9 @@
 		44DE88DE2F4BDEA500400553 /* AuthGateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthGateView.swift; sourceTree = "<group>"; };
 		44DE88E02F4BDEA500400553 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		44DE88E22F4BDEA500400553 /* RegisterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterView.swift; sourceTree = "<group>"; };
+		44E10A062F624AAE00112233 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		44E10A072F624AAE00112233 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		44E10A082F624AAE00112233 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountView.swift; sourceTree = "<group>"; };
 		44DE88E42F4BDEA500400553 /* UserProfileRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileRepository.swift; sourceTree = "<group>"; };
 		44DE88E62F4BDEA500400553 /* FirestoreUserProfileRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirestoreUserProfileRepository.swift; sourceTree = "<group>"; };
 		44DE88E82F4BDEA500400553 /* ReceiptRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiptRepository.swift; sourceTree = "<group>"; };
@@ -229,8 +235,11 @@
 		44DE88C52F4BDE1200400553 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				44E10A082F624AAE00112233 /* AccountView.swift */,
 				44DE88DE2F4BDEA500400553 /* AuthGateView.swift */,
 				44DE88D22F4BDEA500400553 /* ContentView.swift */,
+				44E10A072F624AAE00112233 /* HistoryView.swift */,
+				44E10A062F624AAE00112233 /* HomeView.swift */,
 				44DE88E02F4BDEA500400553 /* LoginView.swift */,
 				44DE88D42F4BDEA500400553 /* ManualEntryView.swift */,
 				44DE88E22F4BDEA500400553 /* RegisterView.swift */,
@@ -399,7 +408,10 @@
 				44DE88DB2F4BDEA500400553 /* FirebaseAuthService.swift in Sources */,
 				44DE88D72F4BDEA500400553 /* ManualEntryModels.swift in Sources */,
 				44DE88D52F4BDEA500400553 /* ManualEntryView.swift in Sources */,
+				44E10A0B2F624AAE00112233 /* AccountView.swift in Sources */,
 				44DE88D32F4BDEA500400553 /* ContentView.swift in Sources */,
+				44E10A0A2F624AAE00112233 /* HistoryView.swift in Sources */,
+				44E10A092F624AAE00112233 /* HomeView.swift in Sources */,
 				44DE88CD2F4BDE7200400553 /* Receipt.swift in Sources */,
 				44DE88CB2F4BDE6A00400553 /* Item.swift in Sources */,
 				44DE88CF2F4BDE8A00400553 /* SplitCalculator.swift in Sources */,
