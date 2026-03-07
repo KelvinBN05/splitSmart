@@ -6,7 +6,7 @@ const { DocumentProcessorServiceClient } = require("@google-cloud/documentai");
 admin.initializeApp();
 
 const documentAIClient = new DocumentProcessorServiceClient();
-const PARSER_VERSION = "docai-v10-2026-03-06";
+const PARSER_VERSION = "docai-v11-2026-03-06";
 
 exports.processOCRJob = functions.firestore
   .document("users/{userId}/ocrJobs/{jobId}")
@@ -122,6 +122,7 @@ function mapReceiptFromDocumentAI(document) {
     { name: "entity", items: aggregateItems(entityItems) },
     { name: "columnar", items: parseItemsFromColumnarLines(lines) },
     { name: "paired-lines", items: parseItemsFromLines(lines) },
+    { name: "scattered-prices", items: parseItemsFromScatteredPriceLines(lines) },
     { name: "single-line", items: parseItemsInline(lines) },
     { name: "raw-text", items: parseItemsFromRawText(rawText) },
   ];
@@ -563,6 +564,83 @@ function parseItemsInline(lines) {
   return aggregateItems(out);
 }
 
+function parseItemsFromScatteredPriceLines(lines) {
+  const stopAt = lines.findIndex((line) => /subtotal|^total\b|amount\b|paid\b/i.test(String(line)));
+  const window = stopAt >= 0 ? lines.slice(0, stopAt) : lines;
+  const items = [];
+
+  for (let i = 0; i < window.length; i += 1) {
+    const line = String(window[i] || "").trim();
+    const price = extractPriceFromLine(line);
+    if (!price) continue;
+
+    // Skip totals/discount/paid lines that often carry the same price format.
+    const neighborhood = [window[i - 2], window[i - 1], window[i], window[i + 1], window[i + 2]]
+      .map((v) => String(v || "").toLowerCase())
+      .join(" ");
+    if (/(subtotal|total|amount|paid|discount|tax|change)/i.test(neighborhood)) continue;
+
+    let bestName = "";
+    let bestDistance = 999;
+    let bestIndex = -1;
+
+    for (let d = 1; d <= 8; d += 1) {
+      const beforeIndex = i - d;
+      const afterIndex = i + d;
+
+      const candidates = [];
+      if (beforeIndex >= 0) candidates.push({ idx: beforeIndex, text: String(window[beforeIndex] || "").trim() });
+      if (afterIndex < window.length) candidates.push({ idx: afterIndex, text: String(window[afterIndex] || "").trim() });
+
+      for (const candidate of candidates) {
+        const text = candidate.text;
+        if (!text) continue;
+        if (/^\d+$/.test(text)) continue;
+        if (/^[\W_]+$/.test(text)) continue;
+        if (extractPriceFromLine(text)) continue;
+        if (!looksLikePotentialItemLine(text)) continue;
+        const cleaned = cleanItemName(text);
+        if (!cleaned || !looksLikeItemName(cleaned)) continue;
+
+        bestName = cleaned;
+        bestDistance = d;
+        bestIndex = candidate.idx;
+        break;
+      }
+      if (bestName) break;
+    }
+
+    if (!bestName) continue;
+
+    // Merge continuation line(s) for wrapped descriptions.
+    if (bestIndex >= 0) {
+      for (let k = 1; k <= 2; k += 1) {
+        const continuation = String(window[bestIndex + k] || "").trim();
+        if (!continuation) continue;
+        if (/^\d+$/.test(continuation)) continue;
+        if (extractPriceFromLine(continuation)) continue;
+        if (!/[A-Za-z]/.test(continuation)) continue;
+        if (!looksLikePotentialItemLine(continuation)) continue;
+        if (!looksLikeItemName(continuation)) continue;
+        if (bestDistance + k > 8) continue;
+        bestName = cleanItemName(`${bestName} ${continuation}`);
+      }
+    }
+
+    const qtyNearby = Number(String(window[Math.max(0, bestIndex - 1)] || "").trim());
+    const quantity = (!Number.isNaN(qtyNearby) && qtyNearby > 0 && qtyNearby < 20) ? Math.floor(qtyNearby) : 1;
+
+    items.push({
+      name: bestName,
+      quantity,
+      price,
+    });
+    if (items.length >= 80) break;
+  }
+
+  return aggregateItems(items);
+}
+
 function parseTaxFromRawText(text) {
   const lines = String(text || "")
     .split("\n")
@@ -719,7 +797,7 @@ function parseInlineItemLine(line) {
 function extractPriceFromLine(line) {
   const value = String(line || "").trim();
   if (!value) return "";
-  const match = value.match(/(?:[A-Z]{1,3}\s*)?\$?([0-9]+\.[0-9]{2})\s*[A-Z]?\s*[↓-]?\s*$/);
+  const match = value.match(/(?:[A-Z]{1,3}\s*)?\$?([0-9]+\.[0-9]{1,2})\s*[A-Z]?\s*[↓-]?\s*$/);
   if (!match) return "";
   return normalizeAmount(match[1]);
 }
@@ -737,13 +815,13 @@ function parseTotalsFromLines(lines) {
   let total = 0;
   for (let i = 0; i < lines.length; i += 1) {
     const line = String(lines[i] || "");
-    const subtotalMatch = line.match(/subtotal[^0-9]*([0-9]+\.[0-9]{2})/i);
+    const subtotalMatch = line.match(/subtotal[^0-9]*([0-9]+\.[0-9]{1,2})/i);
     if (subtotalMatch) subtotal = Number(subtotalMatch[1]) || subtotal;
-    const totalMatch = line.match(/^total[^0-9]*([0-9]+\.[0-9]{2})/i);
+    const totalMatch = line.match(/^total[^0-9]*([0-9]+\.[0-9]{1,2})/i);
     if (totalMatch) total = Number(totalMatch[1]) || total;
     if (/subtotal/i.test(line) && !subtotalMatch) {
       for (let lookahead = i + 1; lookahead <= Math.min(i + 5, lines.length - 1); lookahead += 1) {
-        const next = String(lines[lookahead] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
+        const next = String(lines[lookahead] || "").match(/([0-9]+\.[0-9]{1,2})\s*$/);
         if (!next) continue;
         subtotal = Number(next[1]) || subtotal;
         break;
@@ -751,7 +829,7 @@ function parseTotalsFromLines(lines) {
     }
     if (/^total\b/i.test(line) && !totalMatch) {
       for (let lookahead = i + 1; lookahead <= Math.min(i + 6, lines.length - 1); lookahead += 1) {
-        const next = String(lines[lookahead] || "").match(/([0-9]+\.[0-9]{2})\s*$/);
+        const next = String(lines[lookahead] || "").match(/([0-9]+\.[0-9]{1,2})\s*$/);
         if (!next) continue;
         total = Number(next[1]) || total;
         break;
