@@ -1,15 +1,32 @@
 # SplitSmart
 
-SplitSmart is an iOS app for scanning receipts, reviewing OCR output, and splitting expenses across friends or custom participants.
+SplitSmart is an iOS receipt-splitting app built with SwiftUI and Firebase. It lets users scan or upload receipts, review OCR output before saving, split items across multiple people, and share finalized receipts with friends.
 
-## What It Does
+## Product Demo
 
-- Scan a receipt with the camera or import a photo
-- Parse line items, quantities, and totals with a cloud OCR pipeline
-- Review and correct OCR results before saving
-- Split items across one or more people
-- Share receipts with friends and track them in History
-- Save private receipt history per user
+### App Preview
+
+| Home Screen | App Icon |
+| --- | --- |
+| ![SplitSmart home screen](docs/screenshots/home.png) | ![SplitSmart app icon](docs/screenshots/app-icon.png) |
+
+### Main User Flow
+
+1. Sign in or create an account.
+2. Start a receipt from the Home screen by scanning, uploading a photo, or using manual entry.
+3. Review OCR-detected merchant, items, quantities, and totals before saving.
+4. Adjust assignments so one item can belong to one or many people.
+5. Save the receipt, revisit it in History, or share it with friends.
+6. Accept incoming shared receipts directly from History.
+
+## Features
+
+- Camera scan and photo import for receipts
+- Cloud OCR pipeline with editable in-app review
+- Multi-person item assignment and split calculation
+- Friend system with shared receipt workflows
+- Private receipt history per account
+- Firebase-backed authentication and storage
 
 ## Tech Stack
 
@@ -20,34 +37,38 @@ SplitSmart is an iOS app for scanning receipts, reviewing OCR output, and splitt
 - Firebase Cloud Functions (Node.js)
 - Google Cloud Document AI
 
-## Repo Layout
+## Architecture
 
-- `ReceiptSplitter/` - iOS app source
-- `ReceiptSplitterTests/` - iOS unit tests
-- `functions/` - OCR parsing and backend logic
-- `docs/screenshots/` - README assets
-- `firestore.rules` - Firestore access rules
-- `storage.rules` - Storage access rules
+- `ReceiptSplitter/`
+  - SwiftUI app source, views, models, and services
+- `ReceiptSplitterTests/`
+  - iOS unit tests
+- `functions/`
+  - OCR processing logic and parser tests
+- `docs/screenshots/`
+  - README demo assets
+- `firestore.rules`
+  - Firestore access control
+- `storage.rules`
+  - Storage access control
 
-## Screenshot
+## Local Development
 
-![SplitSmart home screen](docs/screenshots/home.png)
-
-## Running the App
+### iOS App
 
 1. Open `ReceiptSplitter.xcodeproj` in Xcode.
-2. Select an iOS simulator or device.
+2. Select a simulator or physical device.
 3. Build and run with `Cmd + R`.
 
-## Backend Setup
+### Firebase Backend
 
 1. Create a Firebase project.
 2. Enable:
    - Email/Password Authentication
    - Firestore
    - Storage
-3. Add your iOS app and place `GoogleService-Info.plist` in `ReceiptSplitter/`.
-4. Install function dependencies:
+3. Add the iOS app and place `GoogleService-Info.plist` in `ReceiptSplitter/`.
+4. Install Cloud Functions dependencies:
 
 ```bash
 cd functions
@@ -62,15 +83,20 @@ firebase deploy --only firestore:rules,storage,functions --project recieptsplitt
 
 ## Testing
 
-### iOS tests
+### iOS Tests
 
 ```bash
 xcodebuild test -project ReceiptSplitter.xcodeproj -scheme ReceiptSplitter -destination 'platform=iOS Simulator,name=iPhone 17 Pro Max'
 ```
 
-### Functions tests
+### Functions Tests
 
 ```bash
 cd functions
 npm test
 ```
+
+## Notes
+
+- `GoogleService-Info.plist` contains a Firebase client API key, which is expected for iOS Firebase apps.
+- Security is enforced through Firebase Auth, Firestore and Storage rules, API key restrictions, and App Check configuration.
