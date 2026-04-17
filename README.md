@@ -4,11 +4,11 @@ SplitSmart is an iOS receipt-splitting app built with SwiftUI and Firebase. It l
 
 ## Product Demo
 
-### App Preview
+### Current UI Preview
 
-| Home Screen | App Icon |
+| Home | History |
 | --- | --- |
-| ![SplitSmart home screen](docs/screenshots/home.png) | ![SplitSmart app icon](docs/screenshots/app-icon.png) |
+| ![SplitSmart home screen](docs/screenshots/home-current.png) | ![SplitSmart history screen](docs/screenshots/history-current.png) |
 
 ### Main User Flow
 
@@ -18,6 +18,12 @@ SplitSmart is an iOS receipt-splitting app built with SwiftUI and Firebase. It l
 4. Adjust assignments so one item can belong to one or many people.
 5. Save the receipt, revisit it in History, or share it with friends.
 6. Accept incoming shared receipts directly from History.
+
+### Demo Highlights
+
+- **Scan-first home screen:** clear entry points for receipt scanning, manual entry, and photo upload
+- **Review-before-save flow:** OCR results can be corrected before they are written to history
+- **Shared split history:** users can reopen receipts, review splits, and manage shared activity from History
 
 ## Features
 
