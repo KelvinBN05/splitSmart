@@ -11,7 +11,7 @@ struct LoginView: View {
         VStack(spacing: 14) {
             HStack {
                 Image(systemName: "envelope")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.royal)
                 TextField("Email", text: $email)
 #if os(iOS)
                     .autocapitalization(.none)
@@ -19,28 +19,22 @@ struct LoginView: View {
                     .autocorrectionDisabled(true)
 #endif
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .appInputField()
 
             HStack {
                 Image(systemName: "lock")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.royal)
                 SecureField("Password", text: $password)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .appInputField()
 
             Button("Sign In", action: onSubmit)
-                .font(.headline)
+                .font(.headline.weight(.bold))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color(red: 0.04, green: 0.45, blue: 0.95))
+                .padding(.vertical, 14)
+                .background(AppTheme.gold)
                 .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .disabled(isSubmitting)
         }
     }

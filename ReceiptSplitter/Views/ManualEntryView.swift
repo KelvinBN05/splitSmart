@@ -38,124 +38,200 @@ struct ManualEntryView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Receipt Details") {
-                TextField("Merchant Name", text: $merchantName)
-                TextField("Participants (comma separated)", text: $participantNames)
-                if !friendSuggestions.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(friendSuggestions, id: \.self) { friendName in
-                                let isSelected = parsedParticipants.contains(friendName)
-                                Button {
-                                    addParticipantIfNeeded(friendName)
-                                } label: {
-                                    Label(friendName, systemImage: isSelected ? "checkmark.circle.fill" : "plus.circle")
-                                        .font(.caption.weight(.semibold))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(isSelected ? Color.green.opacity(0.18) : Color.blue.opacity(0.12))
-                                        .clipShape(Capsule())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-                TextField("Tax", text: $tax)
-                TextField("Tip", text: $tip)
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    AppSectionHeader(
+                        "Manual Entry",
+                        eyebrow: "Build Split",
+                        detail: "Set the receipt details, assign people, then calculate the split."
+                    )
 
-                if !isTaxValid {
-                    Text("Tax must be a valid number.")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Receipt Details")
+                            .font(.headline)
+                            .foregroundStyle(AppTheme.ink)
 
-                if !isTipValid {
-                    Text("Tip must be a valid number.")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
+                        Text("Add the merchant, who joined the bill, and the extra charges before assigning items.")
+                            .font(.footnote)
+                            .foregroundStyle(AppTheme.muted)
 
-                if let submitErrorMessage {
-                    Text(submitErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-            }
-            .textCase(nil)
+                        TextField("Merchant Name", text: $merchantName)
+                            .appInputField()
 
-            Section("Items") {
-                ForEach($itemDrafts) { $draft in
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("Item name", text: $draft.name)
+                        TextField("Participants (comma separated)", text: $participantNames)
+                            .appInputField()
+#if os(iOS)
+                            .textInputAutocapitalization(.words)
+#endif
 
-                        HStack {
-                            Stepper("Qty: \(draft.quantity)", value: $draft.quantity, in: 1...99)
-                            TextField("Price", text: $draft.price)
-                                .multilineTextAlignment(.trailing)
-                        }
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(parsedParticipants, id: \.self) { participant in
-                                    Button {
-                                        toggleAssignment(for: participant, draft: $draft)
-                                    } label: {
-                                        Text(participant)
-                                            .font(.caption.weight(.semibold))
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 6)
-                                            .background(draft.assignedParticipantNames.contains(participant) ? Color.blue.opacity(0.2) : Color.gray.opacity(0.15))
-                                            .clipShape(Capsule())
+                        if !friendSuggestions.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(friendSuggestions, id: \.self) { friendName in
+                                        let isSelected = parsedParticipants.contains(friendName)
+                                        Button {
+                                            addParticipantIfNeeded(friendName)
+                                        } label: {
+                                            Label(friendName, systemImage: isSelected ? "checkmark.circle.fill" : "plus.circle")
+                                                .font(.caption.weight(.semibold))
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 6)
+                                                .background(isSelected ? Color.green.opacity(0.18) : AppTheme.goldSoft)
+                                                .clipShape(Capsule())
+                                        }
+                                        .buttonStyle(.plain)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
                         }
+
+                        HStack(spacing: 12) {
+                            TextField("Tax", text: $tax)
+                                .appInputField()
+#if os(iOS)
+                                .keyboardType(.decimalPad)
+#endif
+                            TextField("Tip", text: $tip)
+                                .appInputField()
+#if os(iOS)
+                                .keyboardType(.decimalPad)
+#endif
+                        }
+
+                        if !isTaxValid {
+                            validationMessage("Tax must be a valid number.")
+                        }
+                        if !isTipValid {
+                            validationMessage("Tip must be a valid number.")
+                        }
+                        if let submitErrorMessage {
+                            validationMessage(submitErrorMessage)
+                        }
                     }
-                    .padding(.vertical, 4)
-                }
-                .onDelete(perform: deleteItems)
+                    .appCard(cornerRadius: 24, padded: true)
 
-                Button {
-                    var newDraft = ManualEntryItemDraft()
-                    newDraft.assignedParticipantNames = Set(defaultParticipantAssignment)
-                    itemDrafts.append(newDraft)
-                } label: {
-                    Label("Add Item", systemImage: "plus.circle")
-                }
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("Items")
+                                .font(.headline)
+                                .foregroundStyle(AppTheme.ink)
+                            Spacer()
+                            Button {
+                                var newDraft = ManualEntryItemDraft()
+                                newDraft.assignedParticipantNames = Set(defaultParticipantAssignment)
+                                itemDrafts.append(newDraft)
+                            } label: {
+                                Label("Add Item", systemImage: "plus.circle.fill")
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(AppTheme.gold)
+                        }
 
-                if !hasAtLeastOneValidItem {
-                    Text("Add at least one item with a name and numeric price.")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
+                        Text("Assign each item to one or more people. Totals update after calculation.")
+                            .font(.footnote)
+                            .foregroundStyle(AppTheme.muted)
+
+                        ForEach($itemDrafts) { $draft in
+                            VStack(alignment: .leading, spacing: 12) {
+                                TextField("Item name", text: $draft.name)
+                                    .appInputField()
+
+                                HStack(spacing: 12) {
+                                    Stepper("Qty: \(draft.quantity)", value: $draft.quantity, in: 1...99)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    TextField("Price", text: $draft.price)
+                                        .multilineTextAlignment(.trailing)
+                                        .appInputField()
+#if os(iOS)
+                                        .keyboardType(.decimalPad)
+#endif
+                                }
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(parsedParticipants, id: \.self) { participant in
+                                            Button {
+                                                toggleAssignment(for: participant, draft: $draft)
+                                            } label: {
+                                                Text(participant)
+                                                    .font(.caption.weight(.semibold))
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 6)
+                                                    .background(draft.assignedParticipantNames.contains(participant) ? AppTheme.goldSoft : AppColors.secondaryBackground)
+                                                    .clipShape(Capsule())
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(16)
+                            .background(Color.white.opacity(0.7))
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        }
+
+                        if !hasAtLeastOneValidItem {
+                            validationMessage("Add at least one item with a name and numeric price.")
+                        }
+                    }
+                    .appCard(cornerRadius: 24, padded: true)
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 120)
             }
-            .textCase(nil)
+            .background(AppTheme.pageGradient.ignoresSafeArea())
 
-            Section("Actions") {
+            VStack(spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Ready to calculate?")
+                            .font(.headline)
+                            .foregroundStyle(AppTheme.ink)
+                        Text("Review the people and item prices before continuing.")
+                            .font(.footnote)
+                            .foregroundStyle(AppTheme.muted)
+                    }
+                    Spacer()
+                }
+
                 Button("Calculate Split") {
                     submitManualSplit()
                 }
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 8)
+                .font(.headline.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(canSubmit && !isSubmitting ? AppTheme.gold : AppTheme.line)
+                .foregroundStyle(canSubmit && !isSubmitting ? .white : AppTheme.muted)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .disabled(!canSubmit || isSubmitting)
             }
-            .textCase(nil)
+            .padding(16)
+            .background(.ultraThinMaterial)
         }
         .navigationTitle("Manual Entry")
-#if os(iOS)
-        .scrollContentBackground(.hidden)
-        .background(Color(UIColor.systemGroupedBackground))
-#endif
         .navigationDestination(item: $splitResult) { result in
             SplitResultsView(result: result) { savedReceipt in
                 onReceiptSaved(savedReceipt)
             }
         }
+    }
+
+    private func validationMessage(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(AppTheme.danger)
+            Text(message)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AppTheme.danger)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(AppTheme.danger.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var parsedParticipants: [String] {
@@ -294,51 +370,109 @@ private struct SplitResultsView: View {
     @State private var didSave = false
 
     var body: some View {
-        List {
-            Section("Receipt Summary") {
-                LabeledContent("Merchant", value: result.receipt.merchantName)
-                LabeledContent("Subtotal", value: currencyString(result.receipt.subtotal))
-                LabeledContent("Tax", value: currencyString(result.receipt.tax))
-                LabeledContent("Tip", value: currencyString(result.receipt.tip))
-                LabeledContent("Total", value: currencyString(result.receipt.total))
-            }
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    AppSectionHeader(
+                        "Split Result",
+                        eyebrow: "Summary",
+                        detail: "Review the totals below before saving this receipt to history."
+                    )
 
-            Section("Per Person Split") {
-                ForEach(result.breakdown) { person in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(person.participant.name)
-                            .font(.headline)
-                        Text("Items: \(currencyString(person.itemTotal))")
-                        Text("Tax: \(currencyString(person.taxShare))")
-                        Text("Tip: \(currencyString(person.tipShare))")
-                        Text("Grand Total: \(currencyString(person.grandTotal))")
-                            .fontWeight(.semibold)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(result.receipt.merchantName)
+                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .foregroundStyle(.white)
+
+                        HStack(spacing: 12) {
+                            AppMetricPill(label: "Subtotal", value: currencyString(result.receipt.subtotal))
+                            AppMetricPill(label: "Total", value: currencyString(result.receipt.total))
+                        }
+
+                        HStack(spacing: 18) {
+                            resultStat("Tax", value: currencyString(result.receipt.tax))
+                            resultStat("Tip", value: currencyString(result.receipt.tip))
+                        }
                     }
-                    .padding(.vertical, 4)
-                }
-            }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppTheme.heroGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
 
-            Section("Actions") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Per Person Split")
+                            .font(.headline)
+                            .foregroundStyle(AppTheme.ink)
+
+                        ForEach(result.breakdown) { person in
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text(person.participant.name)
+                                        .font(.headline)
+                                        .foregroundStyle(AppTheme.ink)
+                                    Spacer()
+                                    Text(currencyString(person.grandTotal))
+                                        .font(.title3.weight(.bold))
+                                        .foregroundStyle(AppTheme.gold)
+                                }
+
+                                HStack(spacing: 18) {
+                                    resultStat("Items", value: currencyString(person.itemTotal))
+                                    resultStat("Tax", value: currencyString(person.taxShare))
+                                    resultStat("Tip", value: currencyString(person.tipShare))
+                                }
+                            }
+                            .padding(16)
+                            .background(Color.white.opacity(0.72))
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        }
+                    }
+                    .appCard(cornerRadius: 24, padded: true)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 110)
+            }
+            .background(AppTheme.pageGradient.ignoresSafeArea())
+
+            VStack(spacing: 10) {
                 Button(didSave ? "Saved to History" : "Save to History") {
                     guard !didSave else { return }
                     onSave(result.receipt)
                     didSave = true
                 }
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 8)
+                .font(.headline.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(didSave ? AppTheme.success : AppTheme.gold)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .disabled(didSave)
+
+                Text(didSave ? "This receipt is now in History." : "Saving also makes the split available from the History tab.")
+                    .font(.footnote)
+                    .foregroundStyle(AppTheme.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(16)
+            .background(.ultraThinMaterial)
         }
         .navigationTitle("Split Result")
-#if os(iOS)
-        .scrollContentBackground(.hidden)
-        .background(Color(UIColor.systemGroupedBackground))
-#endif
     }
 
     private func currencyString(_ amount: Decimal) -> String {
         ManualEntryFormatters.currency.string(from: NSDecimalNumber(decimal: amount)) ?? "$0.00"
+    }
+
+    private func resultStat(_ label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.muted)
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.ink)
+        }
     }
 }
 

@@ -20,14 +20,14 @@ final class SessionStore: ObservableObject {
         authService: AuthService = FirebaseAuthService(),
         userProfileRepository: UserProfileRepository = FirestoreUserProfileRepository()
     ) {
-        self.authService = authService
+        self.authService = authService	
         self.userProfileRepository = userProfileRepository
         self.authStateObserver = authService.observeAuthState { [weak self] appUser in
             Task { @MainActor in
                 self?.state = appUser.map(State.signedIn) ?? .signedOut
             }
         }
-        restoreSession()
+        restoreSession() 
     }
 
     func restoreSession() {

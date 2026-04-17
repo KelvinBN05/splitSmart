@@ -55,7 +55,7 @@ struct HomeView: View {
             .padding(.top, 20)
             .padding(.bottom, 28)
         }
-        .background(AppColors.groupedBackground)
+        .background(AppTheme.pageGradient.ignoresSafeArea())
         .navigationTitle("Home")
 #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -95,27 +95,46 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Welcome back")
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(Color(red: 0.06, green: 0.10, blue: 0.22))
-                Text("Scan, split, and share receipts.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("CONTROL CENTER")
+                        .font(.caption.weight(.bold))
+                        .tracking(1.1)
+                        .foregroundStyle(AppTheme.gold)
+                    Text("Welcome back")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppTheme.ink)
+                    Text("Scan, split, and share receipts with a cleaner approval flow.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.muted)
+                }
+
+                Spacer()
+
+                Button(action: onAccountTapped) {
+                    Text(userInitials)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.ink)
+                        .frame(width: 58, height: 58)
+                        .background(AppTheme.goldSoft)
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.gold.opacity(0.55), lineWidth: 1)
+                        )
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open account")
             }
 
-            Spacer()
-
-            Button(action: onAccountTapped) {
-                Text(userInitials)
-                    .font(.headline.weight(.bold))
-                    .frame(width: 56, height: 56)
-                    .background(Color.blue.opacity(0.15))
-                    .clipShape(Circle())
+            HStack(spacing: 12) {
+                AppMetricPill(label: "Receipts", value: "\(receipts.count)")
+                AppMetricPill(label: "Status", value: isBusy ? "OCR running" : "Ready")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open account")
+            .padding(18)
+            .background(AppTheme.heroGradient)
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
         }
     }
 
@@ -135,70 +154,97 @@ struct HomeView: View {
 
     private var scanCardBody: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Image(systemName: "camera")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 50, height: 50)
-                .background(.white.opacity(0.2))
-                .clipShape(Circle())
+            HStack(alignment: .top, spacing: 16) {
+                Image(systemName: "camera")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 50, height: 50)
+                    .background(.white.opacity(0.14))
+                    .clipShape(Circle())
 
-            Text("Scan Receipt")
-                .font(.largeTitle.weight(.bold))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.85)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Scan Receipt")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.85)
 
-            Text("Start splitting")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.95))
+                    Text("Capture a bill, verify the OCR extraction, and move it straight into your shared split history.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.86))
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    statusCapsule("Document scan")
+                    statusCapsule("Review before save")
+                }
+
+                HStack(spacing: 12) {
+                    Label("Open scanner", systemImage: "arrow.right.circle.fill")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(AppTheme.ink)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(.white)
+                        .clipShape(Capsule())
+
+                    Text(isBusy ? "Processing current upload" : "Best for paper receipts")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.82))
+                }
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.02, green: 0.48, blue: 0.95), Color(red: 0.08, green: 0.41, blue: 0.91)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
+        .background(AppTheme.heroGradient)
         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .shadow(color: .blue.opacity(0.20), radius: 14, x: 0, y: 8)
+        .shadow(color: AppTheme.navy.opacity(0.22), radius: 20, x: 0, y: 12)
     }
 
     private var quickActions: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Quick Actions")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+            AppSectionHeader("Quick Actions", eyebrow: "Start Here", detail: "Pick the fastest way to move a receipt into the app.")
 
-            HStack(spacing: 14) {
-#if os(iOS)
-                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                    SmallActionCard(
-                        title: isBusy ? "Scanning..." : "Upload Photo",
-                        systemImage: "photo"
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(isProcessingPhoto || isBusy)
-#else
-                SmallActionCard(title: "Upload Photo", systemImage: "photo")
-#endif
+            VStack(spacing: 14) {
                 NavigationLink {
                     ManualEntryView(friendSuggestions: friendSuggestions, onReceiptSaved: onReceiptSaved)
                 } label: {
-                    SmallActionCard(title: "Manual Entry", systemImage: "plus")
+                    FeaturedActionCard(
+                        title: "Manual Entry",
+                        subtitle: "Build a split from scratch when you already know the items.",
+                        systemImage: "square.and.pencil",
+                        accent: AppTheme.gold
+                    )
                 }
                 .buttonStyle(.plain)
+
+                HStack(spacing: 14) {
+#if os(iOS)
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                        SmallActionCard(
+                            title: isBusy ? "Scanning..." : "Upload Photo",
+                            subtitle: "Import from library",
+                            systemImage: "photo",
+                            accent: AppTheme.royal
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isProcessingPhoto || isBusy)
+#else
+                    SmallActionCard(title: "Upload Photo", subtitle: "Import from library", systemImage: "photo", accent: AppTheme.royal)
+#endif
+                }
             }
 
-            Text("Scan Status")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+            AppSectionHeader("Scan Status", detail: "Track where the current receipt is in the import flow.")
 
             if let photoProcessingError {
                 Text(photoProcessingError)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(AppTheme.danger)
             }
 
             scanFlowStatusCard
@@ -212,13 +258,13 @@ struct HomeView: View {
                     .foregroundStyle(scanFlowTint)
                 Text(scanFlowTitle)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                    .foregroundStyle(AppTheme.ink)
                 Spacer()
             }
 
             Text(scanFlowDetail)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.muted)
 
             if isBusy {
                 ProgressView()
@@ -228,7 +274,7 @@ struct HomeView: View {
             if let latestOCRJobID, !latestOCRJobID.isEmpty {
                 Text("OCR Job: \(latestOCRJobID)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.muted)
             }
 
             if scanFlowStage == .failed || scanFlowStage == .saved {
@@ -237,16 +283,18 @@ struct HomeView: View {
                 }
                 .font(.footnote.weight(.semibold))
                 .buttonStyle(.plain)
+                .foregroundStyle(AppTheme.gold)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(AppTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(scanFlowTint.opacity(0.20), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(scanFlowTint.opacity(0.24), lineWidth: 1)
         )
+        .shadow(color: AppTheme.navy.opacity(0.06), radius: 14, x: 0, y: 8)
     }
 
     private var scanFlowTitle: String {
@@ -387,13 +435,11 @@ struct HomeView: View {
     private var recentActivity: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Recent Activity")
-                    .font(.title.weight(.bold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                AppSectionHeader("Recent Activity", eyebrow: "History Snapshot")
                 Spacer()
                 Text("\(receipts.count) total")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.muted)
             }
 
             if isLoadingReceipts {
@@ -409,6 +455,16 @@ struct HomeView: View {
             }
         }
     }
+
+    private func statusCapsule(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.white.opacity(0.10))
+            .clipShape(Capsule())
+    }
 }
 
 private struct EmptyActivityCard: View {
@@ -416,14 +472,13 @@ private struct EmptyActivityCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("No activity yet")
                 .font(.headline)
-                .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                .foregroundStyle(AppTheme.ink)
             Text("Create your first receipt from Manual Entry.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .appCard(cornerRadius: 24)
+        .appCard(cornerRadius: 24, padded: true)
     }
 }
 
@@ -432,11 +487,10 @@ private struct LoadingActivityCard: View {
         HStack(spacing: 10) {
             ProgressView()
             Text("Loading recent activity...")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .appCard(cornerRadius: 24)
+        .appCard(cornerRadius: 24, padded: true)
     }
 }
 
@@ -447,15 +501,14 @@ private struct ErrorActivityCard: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Could not load activity")
                 .font(.headline)
-                .foregroundStyle(.red)
+                .foregroundStyle(AppTheme.danger)
             Text(message)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.muted)
                 .lineLimit(3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .appCard(cornerRadius: 24)
+        .appCard(cornerRadius: 24, padded: true)
     }
 }
 
@@ -1325,24 +1378,65 @@ private struct OCRDebugView: View {
 
 private struct SmallActionCard: View {
     let title: String
+    let subtitle: String
     let systemImage: String
+    let accent: Color
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Image(systemName: systemImage)
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(.blue)
+                .foregroundStyle(accent)
                 .frame(width: 50, height: 50)
-                .background(Color.blue.opacity(0.12))
+                .background(accent.opacity(0.12))
                 .clipShape(Circle())
-            Text(title)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppTheme.ink)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(AppTheme.muted)
+            }
         }
-        .padding(20)
         .frame(maxWidth: .infinity, minHeight: 146, alignment: .leading)
-        .appCard(cornerRadius: 24)
+        .appCard(cornerRadius: 24, padded: true)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct FeaturedActionCard: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: systemImage)
+                .font(.title2.weight(.bold))
+                .foregroundStyle(accent)
+                .frame(width: 58, height: 58)
+                .background(accent.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(AppTheme.ink)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.muted)
+            }
+
+            Spacer()
+
+            Image(systemName: "arrow.right")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(AppTheme.ink)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .appCard(cornerRadius: 24, padded: true)
     }
 }
 
@@ -1353,18 +1447,18 @@ private struct ActivityRow: View {
         HStack(spacing: 14) {
             Image(systemName: "doc.text")
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(.gray)
+                .foregroundStyle(AppTheme.royal)
                 .frame(width: 52, height: 52)
-                .background(AppColors.secondaryBackground)
+                .background(AppTheme.goldSoft)
                 .clipShape(Circle())
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(receipt.merchantName)
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                    .foregroundStyle(AppTheme.ink)
                 Text(Formatters.shortDate.string(from: receipt.createdAt))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.muted)
             }
 
             Spacer()
@@ -1372,14 +1466,13 @@ private struct ActivityRow: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text(Formatters.currencyString(from: receipt.total))
                     .font(.title2.weight(.bold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                    .foregroundStyle(AppTheme.ink)
                 Text("Split complete")
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(AppTheme.success)
             }
         }
-        .padding(18)
-        .appCard(cornerRadius: 24)
+        .appCard(cornerRadius: 24, padded: true)
         .accessibilityElement(children: .combine)
     }
 }

@@ -112,7 +112,9 @@ struct ContentView: View {
                 Label("Profile", systemImage: "person")
             }
         }
-        .tint(Color(red: 0.04, green: 0.45, blue: 0.95))
+        .tint(AppTheme.gold)
+        .toolbarBackground(AppTheme.surface, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
         .task {
             await loadReceipts()
         }
@@ -410,6 +412,97 @@ enum Formatters {
     }
 }
 
+enum AppTheme {
+    static let ink = Color(red: 0.01, green: 0.09, blue: 0.15)
+    static let navy = Color(red: 0.06, green: 0.14, blue: 0.28)
+    static let royal = Color(red: 0.12, green: 0.23, blue: 0.54)
+    static let gold = Color(red: 0.79, green: 0.58, blue: 0.08)
+    static let goldSoft = Color(red: 0.97, green: 0.93, blue: 0.79)
+    static let mist = Color(red: 0.96, green: 0.97, blue: 0.99)
+    static let surface = Color.white.opacity(0.94)
+    static let line = Color(red: 0.86, green: 0.89, blue: 0.93)
+    static let muted = Color(red: 0.32, green: 0.38, blue: 0.46)
+    static let success = Color(red: 0.12, green: 0.54, blue: 0.34)
+    static let danger = Color(red: 0.72, green: 0.18, blue: 0.18)
+
+    static let pageGradient = LinearGradient(
+        colors: [
+            Color(red: 0.97, green: 0.98, blue: 1.0),
+            Color(red: 0.94, green: 0.96, blue: 0.99),
+            Color(red: 0.99, green: 0.98, blue: 0.95)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+
+    static let heroGradient = LinearGradient(
+        colors: [
+            Color(red: 0.05, green: 0.11, blue: 0.24),
+            Color(red: 0.11, green: 0.23, blue: 0.49),
+            Color(red: 0.18, green: 0.30, blue: 0.56)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
+struct AppSectionHeader: View {
+    let eyebrow: String?
+    let title: String
+    let detail: String?
+
+    init(_ title: String, eyebrow: String? = nil, detail: String? = nil) {
+        self.eyebrow = eyebrow
+        self.title = title
+        self.detail = detail
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let eyebrow {
+                Text(eyebrow.uppercased())
+                    .font(.caption.weight(.bold))
+                    .tracking(1.1)
+                    .foregroundStyle(AppTheme.gold)
+            }
+            Text(title)
+                .font(.system(.title3, design: .rounded, weight: .bold))
+                .foregroundStyle(AppTheme.ink)
+            if let detail {
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.muted)
+            }
+        }
+    }
+}
+
+struct AppMetricPill: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased())
+                .font(.caption2.weight(.bold))
+                .tracking(0.8)
+                .foregroundStyle(AppTheme.goldSoft.opacity(0.88))
+            Text(value)
+                .font(.system(.headline, design: .rounded, weight: .bold))
+                .foregroundStyle(.white)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.white.opacity(0.10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.12), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
 private struct AppBanner: Identifiable, Equatable {
     enum Style: Equatable {
         case success
@@ -438,8 +531,12 @@ private struct AppBannerView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .background(backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 4)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 1)
+        )
+        .shadow(color: AppTheme.navy.opacity(0.18), radius: 14, x: 0, y: 8)
     }
 
     private var iconName: String {
@@ -452,53 +549,62 @@ private struct AppBannerView: View {
 
     private var backgroundColor: Color {
         switch banner.style {
-        case .success: return Color(red: 0.08, green: 0.58, blue: 0.30)
-        case .error: return Color(red: 0.75, green: 0.16, blue: 0.16)
-        case .info: return Color(red: 0.10, green: 0.45, blue: 0.88)
+        case .success: return AppTheme.success
+        case .error: return AppTheme.danger
+        case .info: return AppTheme.royal
         }
     }
 }
 
 private struct AppCardModifier: ViewModifier {
     let cornerRadius: CGFloat
+    let padded: Bool
 
     func body(content: Content) -> some View {
         content
-            .background(Color.white)
+            .padding(padded ? 18 : 0)
+            .background(AppTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.black.opacity(0.05), lineWidth: 1)
+                    .stroke(AppTheme.line.opacity(0.9), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+            .shadow(color: AppTheme.navy.opacity(0.08), radius: 18, x: 0, y: 10)
+    }
+}
+
+private struct AppInputFieldModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .background(Color.white.opacity(0.98))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(AppTheme.line.opacity(0.95), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: AppTheme.navy.opacity(0.03), radius: 6, x: 0, y: 2)
     }
 }
 
 extension View {
-    func appCard(cornerRadius: CGFloat = 20) -> some View {
-        modifier(AppCardModifier(cornerRadius: cornerRadius))
+    func appCard(cornerRadius: CGFloat = 24, padded: Bool = false) -> some View {
+        modifier(AppCardModifier(cornerRadius: cornerRadius, padded: padded))
+    }
+
+    func appInputField() -> some View {
+        modifier(AppInputFieldModifier())
     }
 }
 
 enum AppColors {
     static var groupedBackground: Color {
-#if os(iOS)
-        return Color(UIColor.systemGroupedBackground)
-#elseif os(macOS)
-        return Color(NSColor.windowBackgroundColor)
-#else
-        return Color(.systemGray6)
-#endif
+        AppTheme.mist
     }
 
     static var secondaryBackground: Color {
-#if os(iOS)
-        return Color(UIColor.secondarySystemBackground)
-#elseif os(macOS)
-        return Color(NSColor.controlBackgroundColor)
-#else
-        return Color(.systemGray5)
-#endif
+        Color.white.opacity(0.82)
     }
 }
 

@@ -1,6 +1,9 @@
 # macOS
 .DS_Store
 
+# Local Codex state
+.codex/
+
 # Xcode build artifacts
 DerivedData/
 build/

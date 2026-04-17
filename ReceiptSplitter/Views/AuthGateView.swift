@@ -38,28 +38,21 @@ private struct AuthView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.92, green: 0.96, blue: 1.00),
-                    Color(red: 0.96, green: 0.98, blue: 1.00),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            AppTheme.pageGradient
+                .ignoresSafeArea()
 
-            VStack(spacing: 20) {
+            VStack(spacing: 18) {
                 VStack(spacing: 8) {
                     Text("SplitSmart")
-                        .font(.system(size: 42, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color(red: 0.06, green: 0.12, blue: 0.25))
-                    Text("Scan receipts, split totals, and track everything in one place.")
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .foregroundStyle(AppTheme.ink)
+                    Text(mode == .signIn ? "Sign in to manage your receipts." : "Create an account to start splitting receipts.")
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(AppTheme.muted)
                         .multilineTextAlignment(.center)
                 }
 
-                VStack(spacing: 16) {
+                VStack(spacing: 18) {
                     Picker("Auth Mode", selection: $mode) {
                         ForEach(Mode.allCases) { item in
                             Text(item.rawValue).tag(item)
@@ -88,37 +81,55 @@ private struct AuthView: View {
                     }
 
                     if let localValidationError {
-                        Text(localValidationError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
+                        authMessage(localValidationError, color: AppTheme.danger, iconName: "exclamationmark.triangle.fill")
                     }
 
                     if let authError = sessionStore.authErrorMessage {
-                        Text(authError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
+                        authMessage(authError, color: AppTheme.danger, iconName: "exclamationmark.triangle.fill")
                     }
 
                     if sessionStore.isAuthenticating {
-                        ProgressView(mode == .signIn ? "Signing in..." : "Creating account...")
-                            .font(.footnote)
+                        HStack(spacing: 10) {
+                            ProgressView()
+                            Text(mode == .signIn ? "Signing in..." : "Creating account...")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(AppTheme.muted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                    } else {
+                        HStack(spacing: 8) {
+                            Image(systemName: "lock.shield")
+                            Text("Private receipts stay tied to your account.")
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AppTheme.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
                     }
                 }
                 .padding(22)
-                .background(.white.opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.06), radius: 14, x: 0, y: 8)
+                .appCard(cornerRadius: 28)
             }
             .padding(24)
+            .frame(maxWidth: 420)
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: 420)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func authMessage(_ message: String, color: Color, iconName: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: iconName)
+                .foregroundStyle(color)
+            Text(message)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(color)
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(color.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var normalizedEmail: String {

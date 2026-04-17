@@ -31,43 +31,51 @@ struct AccountTabView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 22) {
-                VStack(spacing: 10) {
-                    Text("Account")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(initials)
-                        .font(.system(size: 40, weight: .bold))
-                        .frame(width: 88, height: 88)
-                        .background(Color.blue.opacity(0.16))
-                        .clipShape(Circle())
-                    Text(displayName)
-                        .font(.title2.weight(.bold))
-                    Text(email)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("ACCOUNT")
+                        .font(.caption.weight(.bold))
+                        .tracking(1.1)
+                        .foregroundStyle(AppTheme.gold)
+                    HStack(spacing: 16) {
+                        Text(initials)
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                            .foregroundStyle(AppTheme.ink)
+                            .frame(width: 84, height: 84)
+                            .background(AppTheme.goldSoft)
+                            .clipShape(Circle())
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(displayName)
+                                .font(.system(.title2, design: .rounded, weight: .bold))
+                                .foregroundStyle(.white)
+                            Text(email)
+                                .foregroundStyle(.white.opacity(0.78))
+                            Text("Manage who can join shared bills and how your profile appears in split sessions.")
+                                .font(.footnote)
+                                .foregroundStyle(.white.opacity(0.78))
+                        }
+                    }
                 }
-                .padding(.top, 18)
+                .padding(22)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppTheme.heroGradient)
+                .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 10) {
+                    AppSectionHeader("Workspace rules", eyebrow: "Trust & Sharing")
                     Label("Private receipts synced to your account", systemImage: "lock.shield")
                     Label("Add friends once, then reuse them in manual split flows", systemImage: "person.2.badge.plus")
                     Label("OCR review before saving to history", systemImage: "doc.text.magnifyingglass")
                 }
                 .font(.subheadline)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.black.opacity(0.05), lineWidth: 1)
-                )
+                .appCard(cornerRadius: 22, padded: true)
 
                 friendCard
             }
             .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppColors.groupedBackground)
+        .background(AppTheme.pageGradient.ignoresSafeArea())
         .navigationTitle("Profile")
         .task {
             await reloadFriends()
@@ -77,8 +85,7 @@ struct AccountTabView: View {
     private var friendCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Label("Friends", systemImage: "person.3")
-                    .font(.headline)
+                AppSectionHeader("Friends", eyebrow: "Network", detail: "Keep requests and active contacts in one place.")
                 Spacer()
                 if isLoadingFriends {
                     ProgressView()
@@ -86,50 +93,48 @@ struct AccountTabView: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            VStack(spacing: 10) {
                 TextField("Friend email", text: $friendEmailInput)
 #if os(iOS)
                     .textInputAutocapitalization(.never)
 #endif
                     .autocorrectionDisabled(true)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 10)
-                    .background(AppColors.secondaryBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .appInputField()
 
                 Button {
                     Task { await sendFriendRequest() }
                 } label: {
-                    Text(isMutatingFriends ? "Sending..." : "Send")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    HStack {
+                        Text(isMutatingFriends ? "Sending request..." : "Send friend request")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Image(systemName: "arrow.right")
+                            .font(.subheadline.weight(.bold))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .background(AppTheme.gold)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .disabled(isMutatingFriends || friendEmailInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             if let friendErrorMessage {
-                Text(friendErrorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                statusMessage(friendErrorMessage, color: AppTheme.danger, iconName: "exclamationmark.triangle.fill")
             } else if let friendStatusMessage {
-                Text(friendStatusMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.green)
+                statusMessage(friendStatusMessage, color: AppTheme.success, iconName: "checkmark.circle.fill")
             }
 
             if !incomingRequests.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Incoming Requests")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                        .foregroundStyle(AppTheme.ink)
 
                     ForEach(incomingRequests) { request in
-                        HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(request.senderDisplayName)
                                     .font(.subheadline.weight(.semibold))
@@ -137,21 +142,28 @@ struct AccountTabView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            Button("Approve") {
-                                Task { await approveRequest(request.id) }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(isMutatingFriends)
 
-                            Button("Decline") {
-                                Task { await declineRequest(request.id) }
+                            HStack {
+                                Spacer()
+                                Button("Decline") {
+                                    Task { await declineRequest(request.id) }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(isMutatingFriends)
+
+                                Button("Approve") {
+                                    Task { await approveRequest(request.id) }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(AppTheme.gold)
+                                .controlSize(.small)
+                                .disabled(isMutatingFriends)
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(isMutatingFriends)
                         }
+                        .padding(14)
+                        .background(AppColors.secondaryBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
                 }
                 .padding(.top, 2)
@@ -161,10 +173,10 @@ struct AccountTabView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Pending Sent")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                        .foregroundStyle(AppTheme.ink)
 
                     ForEach(outgoingRequests) { request in
-                        HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(request.recipientDisplayName)
                                     .font(.subheadline.weight(.semibold))
@@ -172,17 +184,23 @@ struct AccountTabView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            Spacer()
-                            Text("Pending")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.orange)
-                            Button("Cancel") {
-                                Task { await cancelOutgoingRequest(request.id) }
+
+                            HStack {
+                                Text("Pending")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.orange)
+                                Spacer()
+                                Button("Cancel request") {
+                                    Task { await cancelOutgoingRequest(request.id) }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(isMutatingFriends)
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(isMutatingFriends)
                         }
+                        .padding(14)
+                        .background(AppColors.secondaryBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
                 }
                 .padding(.top, 2)
@@ -196,13 +214,13 @@ struct AccountTabView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Friends")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                        .foregroundStyle(AppTheme.ink)
                     ForEach(friends) { friend in
                         HStack(spacing: 10) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(friend.displayName)
                                     .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                                    .foregroundStyle(AppTheme.ink)
                                 Text(friend.email)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -218,13 +236,7 @@ struct AccountTabView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
+        .appCard(cornerRadius: 22, padded: true)
     }
 
     private func reloadFriends() async {
@@ -311,6 +323,20 @@ struct AccountTabView: View {
             friendErrorMessage = error.localizedDescription
         }
     }
+
+    private func statusMessage(_ text: String, color: Color, iconName: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: iconName)
+                .foregroundStyle(color)
+            Text(text)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(color)
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(color.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
 }
 
 struct AccountProfileSheet: View {
@@ -323,27 +349,51 @@ struct AccountProfileSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        Form {
-            Section("Account") {
-                LabeledContent("Email", value: email)
-                TextField("Display Name", text: $displayName)
-                Text("This name appears in split sessions.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+        ZStack {
+            AppTheme.pageGradient
+                .ignoresSafeArea()
 
-            Section {
+            VStack(alignment: .leading, spacing: 18) {
+                AppSectionHeader("Account", eyebrow: "Profile", detail: "Update the name used across split sessions.")
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Email")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.muted)
+                    Text(email)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.ink)
+
+                    Text("Display Name")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppTheme.muted)
+                    TextField("Display Name", text: $displayName)
+                        .appInputField()
+
+                    Text("This name appears in split sessions.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .appCard(cornerRadius: 24, padded: true)
+
                 Button(isSaving ? "Saving..." : "Save Profile") {
                     onSave()
                 }
+                .font(.headline.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(AppTheme.gold)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .disabled(isSaving || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
 
-            Section {
                 Button("Sign Out", role: .destructive) {
                     onSignOut()
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
             }
+            .padding(20)
         }
         .navigationTitle("Account")
         .presentationDetents([.medium, .large])

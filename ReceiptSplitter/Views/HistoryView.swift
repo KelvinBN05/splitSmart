@@ -30,7 +30,7 @@ struct HistoryView: View {
 
     var body: some View {
         historyContent
-        .background(AppColors.groupedBackground)
+        .background(AppTheme.pageGradient.ignoresSafeArea())
         .navigationTitle("History")
         .navigationDestination(item: $selectedReceipt) { receipt in
             ReceiptSplitOverviewView(
@@ -64,7 +64,7 @@ struct HistoryView: View {
             VStack(spacing: 12) {
                 ProgressView()
                 Text("Loading history...")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AppTheme.muted)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if receipts.isEmpty && incomingInvites.isEmpty {
@@ -76,13 +76,19 @@ struct HistoryView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    AppSectionHeader(
+                        "Shared receipt timeline",
+                        eyebrow: "Archive",
+                        detail: "Review recent splits, accept pending invites, and reopen any bill to adjust assignments."
+                    )
+
                     if !incomingInvites.isEmpty {
                         inviteSection
                     }
                     if !receipts.isEmpty {
                         Text("Your Receipts")
                             .font(.headline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.muted)
                             .padding(.leading, 2)
                     }
                     ForEach(receipts) { receipt in
@@ -99,7 +105,7 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Receipt Invites")
                 .font(.headline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(AppTheme.muted)
                 .padding(.leading, 2)
 
             ForEach(incomingInvites) { invite in
@@ -109,7 +115,7 @@ struct HistoryView: View {
     }
 
     private func inviteCard(_ invite: ReceiptInvite) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(invite.receipt.merchantName)
@@ -121,7 +127,7 @@ struct HistoryView: View {
                 Spacer()
                 Text(Formatters.currencyString(from: invite.receipt.total))
                     .font(.title3.weight(.bold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                    .foregroundStyle(AppTheme.ink)
             }
 
             if let createdAt = invite.createdAt {
@@ -130,36 +136,36 @@ struct HistoryView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                Text("Needs your response")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.gold)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(AppTheme.goldSoft)
+                    .clipShape(Capsule())
+
+                Spacer()
+
+                Button("Decline", role: .destructive) {
+                    Task { await onDeclineInvite(invite) }
+                }
+                .buttonStyle(.bordered)
+
                 Button {
                     Task { await onAcceptInvite(invite) }
                 } label: {
                     Label("Accept", systemImage: "checkmark.circle.fill")
-                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-
-                Button(role: .destructive) {
-                    Task { await onDeclineInvite(invite) }
-                } label: {
-                    Label("Decline", systemImage: "xmark.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                .tint(AppTheme.gold)
             }
         }
-        .padding(16)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+        .appCard(cornerRadius: 22, padded: true)
     }
 
     private func receiptCard(_ receipt: Receipt) -> some View {
-        VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(receipt.merchantName)
@@ -171,41 +177,47 @@ struct HistoryView: View {
                 Spacer()
                 Text(Formatters.currencyString(from: receipt.total))
                     .font(.title3.weight(.bold))
-                    .foregroundStyle(Color(red: 0.08, green: 0.11, blue: 0.22))
+                    .foregroundStyle(AppTheme.ink)
+            }
+
+            HStack {
+                Text("\(receipt.participants.count) people")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.muted)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(AppColors.secondaryBackground)
+                    .clipShape(Capsule())
+
+                Spacer()
+
+                Button(role: .destructive) {
+                    deleteCandidate = receipt
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.subheadline.weight(.bold))
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.bordered)
             }
 
             HStack(spacing: 10) {
                 Button {
                     selectedReceipt = receipt
                 } label: {
-                    Label("Split Overview", systemImage: "person.3")
+                    Label("Open Split Overview", systemImage: "person.3")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-
-                Button(role: .destructive) {
-                    deleteCandidate = receipt
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                .tint(AppTheme.gold)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture {
             selectedReceipt = receipt
         }
-        .padding(16)
-        .background(Color.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.black.opacity(0.05), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+        .appCard(cornerRadius: 22, padded: true)
     }
 }
 
