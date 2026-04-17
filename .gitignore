@@ -77,3 +77,6 @@ functions/.env
 functions/.env.*
 firebase-debug.log
 firepit-log.txt
+
+# Local planning / design artifacts
+design-system/
